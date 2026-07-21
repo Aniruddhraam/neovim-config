@@ -2,7 +2,7 @@
 -- 1. BOOTSTRAP PLUGIN MANAGER (lazy.nvim)
 -- =========================================================================
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
-if not vim.loop.fs_stat(lazypath) then
+if not vim.uv.fs_stat(lazypath) then
   vim.fn.system({ "git", "clone", "--filter=blob:none", "https://github.com/folke/lazy.nvim.git", "--branch=stable", lazypath })
 end
 vim.opt.rtp:prepend(lazypath)
@@ -22,7 +22,7 @@ require("lazy").setup({
     config = function()
       require("tokyonight").setup({
         style = "night",
-        transparent = false,
+        transparent = true,
         terminal_colors = true,
         on_colors = function(colors)
           colors.bg = "#000000"
@@ -51,6 +51,21 @@ require("lazy").setup({
           hl["@lsp.type.namespace"] = { fg = c.orange }
           hl["@type"] = { fg = c.magenta }
           hl["@lsp.type.type"] = { fg = c.magenta }
+          hl["@type.builtin"] = { fg = c.magenta, italic = true }
+
+          hl["@variable.parameter"] = { fg = c.yellow }
+          hl["@lsp.type.parameter"] = { fg = c.yellow }
+
+          hl["@constant"] = { fg = c.orange, bold = true }
+          hl["@constant.builtin"] = { fg = c.orange, italic = true }
+          hl["@boolean"] = { fg = c.orange }
+
+          hl["@constructor"] = { fg = c.magenta, bold = true }
+          hl["@function.method.call"] = { fg = c.cyan, italic = true }
+
+          hl["@operator"] = { fg = c.blue5 }
+          hl["@string.escape"] = { fg = c.magenta }
+          hl["@variable.member"] = { fg = c.teal }
         end,
         styles = {
           comments = { italic = true },
@@ -92,7 +107,7 @@ require("lazy").setup({
           opts = { position = "center", hl = "Keyword" }
       }
 
-      -- [NEW]: Custom function to bypass find_files and jump straight into NvimTree
+      -- Custom function to bypass find_files and jump straight into NvimTree
       _G.Open_Project_In_Tree = function()
         local status_ok, telescope = pcall(require, "telescope")
         if not status_ok then return end
@@ -106,6 +121,7 @@ require("lazy").setup({
               actions.close(prompt_bufnr)
               local dir = selection.value
               if dir then
+                _G._project_root = dir
                 vim.cmd("cd " .. vim.fn.fnameescape(dir))
                 vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
                 vim.cmd("enew") -- Open empty buffer to clear the Alpha background
@@ -118,7 +134,7 @@ require("lazy").setup({
         })
       end
 
-      -- [NEW]: Added the "e" shortcut below
+      -- Added the "e" shortcut below
       dashboard.section.buttons.val = {
           dashboard.button("f", "  Find file", ":Telescope find_files <CR>"),
           dashboard.button("d", "󰉖  Browse Dirs", ":Telescope file_browser<CR>"),
@@ -206,21 +222,34 @@ require("lazy").setup({
         auto_session_suppress_dirs = { "~/", "~/Downloads", "/" },
         auto_restore_enabled = true, 
         auto_save_enabled = true,
+        bypass_save_filetypes = { "alpha" },
         pre_save_cmds = { 
           "NvimTreeClose", 
           "AerialClose", 
-          function() pcall(vim.cmd, "Trouble close") end 
+          function() pcall(vim.cmd, "Trouble close") end,
+          -- Reset cwd to the explicitly tracked project root before saving.
+          function()
+            if _G._project_root and vim.fn.isdirectory(_G._project_root) == 1 then
+              vim.cmd("cd " .. vim.fn.fnameescape(_G._project_root))
+            end
+          end,
         },
-        post_restore_cmds = { "NvimTreeOpen" },
+        post_restore_cmds = {
+          -- Open NvimTree rooted at the (now-correct) project cwd
+          function()
+            vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(vim.fn.getcwd()))
+          end,
+        },
       })
     end,
   },
 
   -- Project Root Detection & Management
   {
-    "ahmedkhalf/project.nvim",
+    "coffebar/project.nvim",
     config = function()
       require("project_nvim").setup({
+        manual_mode = true, -- Don't auto-change cwd; we track it explicitly
         detection_methods = { "pattern" },
         patterns = { ".git", "_darcs", ".hg", ".bzr", ".svn", "Makefile", "package.json", "go.mod" },
       })
@@ -257,35 +286,11 @@ require("lazy").setup({
     end
   },
 
-  -- Universal Test Runner (Neotest)
-  {
-    "nvim-neotest/neotest",
-    dependencies = {
-      "nvim-neotest/nvim-nio",
-      "nvim-lua/plenary.nvim",
-      "antoinemadec/FixCursorHold.nvim",
-      "nvim-treesitter/nvim-treesitter",
-      "nvim-neotest/neotest-go",
-      "nvim-neotest/neotest-python",
-      "rouge8/neotest-rust",
-    },
-    config = function()
-      require("neotest").setup({
-        adapters = {
-          require("neotest-go")({ experimental = { test_table = true } }),
-          require("neotest-python")({ runner = "pytest" }),
-          require("neotest-rust")({ args = { "--no-capture" } }),
-        },
-        status = { virtual_text = true },
-        output = { open_on_run = true },
-      })
-    end
-  },
 
   -- Ultimate Searching & Fuzzy Finding (Telescope)
   {
     "nvim-telescope/telescope.nvim",
-    branch = "master", -- [BUGFIX]: Force master branch to fix 'Invalid buffer id' crash
+    branch = "master", -- Force master branch to fix 'Invalid buffer id' crash
     dependencies = { 
         "nvim-lua/plenary.nvim", 
         "nvim-tree/nvim-web-devicons",
@@ -295,7 +300,7 @@ require("lazy").setup({
       local actions = require("telescope.actions")
       local action_state = require("telescope.actions.state")
 
-      -- [NEW]: Universal function to open a highlighted item's directory in NvimTree
+      -- Universal function to open a highlighted item's directory in NvimTree
       local open_in_tree = function(prompt_bufnr)
         local selection = action_state.get_selected_entry()
         if not selection then return end
@@ -308,22 +313,24 @@ require("lazy").setup({
         vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
       end
 
-      -- [BUGFIX]: File Size Cap to prevent previewer crashes on giant/minified files
+      -- File Size Cap to prevent previewer crashes on giant/minified files
       local previewers = require("telescope.previewers")
       local new_maker = function(filepath, bufnr, opts)
         opts = opts or {}
         filepath = vim.fn.expand(filepath)
-        vim.loop.fs_stat(filepath, function(_, stat)
+        
+        vim.uv.fs_stat(filepath, function(_, stat)
           if not stat then return end
-          if stat.size > 100000 then -- 100KB Limit
-            vim.schedule(function()
-              if vim.api.nvim_buf_is_valid(bufnr) then
-                vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "FILE TOO LARGE TO PREVIEW" })
-              end
-            end)
-          else
-            previewers.buffer_previewer_maker(filepath, bufnr, opts)
-          end
+          
+          vim.schedule(function()
+            if not vim.api.nvim_buf_is_valid(bufnr) then return end
+            
+            if stat.size > 100000 then -- 100KB Limit
+              vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "FILE TOO LARGE TO PREVIEW" })
+            else
+              previewers.buffer_previewer_maker(filepath, bufnr, opts)
+            end
+          end)
         end)
       end
 
@@ -335,7 +342,7 @@ require("lazy").setup({
           sorting_strategy = "ascending",
           mappings = {
             i = {
-              ["<C-e>"] = open_in_tree, -- [NEW]: Press Ctrl+e in any telescope window to jump to the tree
+              ["<C-e>"] = open_in_tree, -- Press Ctrl+e in any telescope window to jump to the tree
             },
             n = {
               ["<C-e>"] = open_in_tree,
@@ -357,6 +364,7 @@ require("lazy").setup({
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       require("nvim-tree").setup({
+        sync_root_with_cwd = true, -- Follow cwd changes so tree matches project root
         on_attach = function(bufnr)
           local api = require('nvim-tree.api')
           api.config.mappings.default_on_attach(bufnr)
@@ -388,17 +396,17 @@ require("lazy").setup({
   -- Syntax Highlighting (Treesitter)
   {
     "nvim-treesitter/nvim-treesitter",
+    lazy = false,
     build = ":TSUpdate",
     config = function()
-      local status_ok, configs = pcall(require, "nvim-treesitter.configs")
-      if not status_ok then return end
-      configs.setup({
-        ensure_installed = { 
-            "javascript", "typescript", "c", "cpp", "python", "html", 
-            "css", "lua", "markdown", "rust", "toml",
-            "go", "gomod", "gowork", "gosum", "gotmpl"
-        },
-        highlight = { enable = true, additional_vim_regex_highlighting = false },
+      require("nvim-treesitter").setup({
+        install_dir = vim.fn.stdpath("data") .. "/site",
+      })
+      require("nvim-treesitter").install({
+        "javascript", "typescript", "c", "cpp", "python", "html",
+        "css", "lua", "markdown", "rust", "toml",
+        "go", "gomod", "gowork", "gosum", "gotmpl",
+        "java",
       })
     end,
   },
@@ -417,6 +425,7 @@ require("lazy").setup({
           html = { "lsp_format" },
           rust = { "rustfmt" },
           go = { "goimports", "gofmt" },
+          java = { "google-java-format" },
         },
         format_on_save = { timeout_ms = 1000, lsp_format = "fallback" },
         formatters = {
@@ -470,13 +479,13 @@ require("lazy").setup({
 
   -- Mason and related tools for LSP management
   { "williamboman/mason.nvim", cmd = "Mason", config = function() require("mason").setup() end },
-  { "williamboman/mason-lspconfig.nvim", dependencies = { "williamboman/mason.nvim" }, config = function() require("mason-lspconfig").setup({ ensure_installed = {} }) end },
+
   {
     "WhoIsSethDaniel/mason-tool-installer.nvim",
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        ensure_installed = { "html-lsp", "clangd", "ruff", "typescript-language-server", "pyrefly", "rust-analyzer", "gopls", "goimports" },
+        ensure_installed = { "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "gopls", "goimports", "jdtls", "google-java-format" },
         auto_update = false,
         run_on_start = true,
       })
@@ -536,26 +545,63 @@ vim.lsp.config("html", {})
 vim.lsp.config("ts_ls", {})  
 
 vim.lsp.config("clangd", { cmd = { "clangd" }, filetypes = { "c", "cpp", "objc", "objcpp" } })
-vim.lsp.config("ruff", { init_options = { settings = { args = {} } } })
-vim.lsp.config("pyrefly", { cmd = { "pyrefly", "lsp" }, filetypes = { "python" } })
-vim.lsp.config("rust_analyzer", { cmd = { "rust-analyzer" }, filetypes = { "rust" }, settings = { ["rust-analyzer"] = { checkOnSave = { command = "clippy" }, cargo = { allFeatures = true } } } })
+vim.lsp.config("basedpyright", {
+  cmd = { "basedpyright-langserver", "--stdio" },
+  filetypes = { "python" },
+  settings = {
+    basedpyright = {
+      analysis = {
+        autoSearchPaths = true,
+        useLibraryCodeForTypes = true,
+        diagnosticMode = "openFilesOnly",
+      },
+    },
+  },
+})
+vim.lsp.config("rust_analyzer", { cmd = { "rust-analyzer" }, filetypes = { "rust" }, settings = { ["rust-analyzer"] = { checkOnSave = true, check = { command = "check" }, cargo = { allFeatures = true } } } })
 
 -- Go LSP
 vim.lsp.config("gopls", {
   cmd = { "gopls" },
   filetypes = { "go", "gomod", "gowork", "gotmpl" },
+  root_markers = { "go.mod", "go.work", ".git" },
   settings = {
     gopls = { completeUnimported = true, usePlaceholders = true, analyses = { unusedparams = true }, semanticTokens = true },
+  },
+})
+
+-- Java LSP
+vim.lsp.config("jdtls", {
+  cmd = { "jdtls" },
+  filetypes = { "java" },
+  root_markers = { "pom.xml", "build.gradle", "build.gradle.kts", ".git", "settings.gradle", "settings.gradle.kts" },
+  settings = {
+    java = {
+      signatureHelp = { enabled = true },
+      contentProvider = { preferred = "fernflower" },
+      completion = {
+        favoriteStaticMembers = {
+          "org.junit.Assert.*",
+          "org.junit.jupiter.api.Assertions.*",
+          "java.util.Objects.requireNonNull",
+          "java.util.Objects.requireNonNullElse",
+        },
+        filteredTypes = { "com.sun.*", "io.micrometer.shaded.*", "java.awt.*", "jdk.*", "sun.*" },
+      },
+      sources = {
+        organizeImports = { starThreshold = 9999, staticStarThreshold = 9999 },
+      },
+    },
   },
 })
 
 vim.lsp.enable("html")
 vim.lsp.enable("ts_ls")
 vim.lsp.enable("clangd")
-vim.lsp.enable("ruff")
-vim.lsp.enable("pyrefly")
+vim.lsp.enable("basedpyright")
 vim.lsp.enable("rust_analyzer")
 vim.lsp.enable("gopls")
+vim.lsp.enable("jdtls")
 
 vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(args)
@@ -567,8 +613,8 @@ vim.api.nvim_create_autocmd("LspAttach", {
     vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
     vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
     vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
-    vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, opts)
-    vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, opts)
+    vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, { buffer = bufnr, silent = true, desc = "Code Action" })
+    vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, { buffer = bufnr, silent = true, desc = "Rename Symbol" })
   end,
 })
 
@@ -591,7 +637,7 @@ vim.opt.ignorecase = true
 vim.opt.smartcase = true   
 vim.opt.incsearch = true   
 
-vim.diagnostic.config({ virtual_text = { severity = vim.diagnostic.severity.ERROR }, signs = true, underline = true })
+vim.diagnostic.config({ virtual_text = { severity = vim.diagnostic.severity.ERROR }, signs = true, underline = true, update_in_insert = true })
 
 -- =========================================================================
 -- 5. CUSTOM KEYBINDINGS & COMMANDS
@@ -615,7 +661,34 @@ local builtin = require('telescope.builtin')
 vim.keymap.set('n', '<C-f>', builtin.current_buffer_fuzzy_find, { noremap = true, silent = true, desc = "Fuzzy Find in File" })
 vim.keymap.set('n', '<leader>f', builtin.find_files, { noremap = true, silent = true, desc = "Find Files" })
 vim.keymap.set('n', '<leader>F', builtin.live_grep, { noremap = true, silent = true, desc = "Find Text" })
-vim.keymap.set('n', '<leader>d', ':Telescope file_browser<CR>', { noremap = true, silent = true, desc = "Directory Browser (cd)" })
+vim.keymap.set('n', '<leader>d', function()
+  require('telescope').extensions.file_browser.file_browser({
+    attach_mappings = function(prompt_bufnr, map)
+      local actions = require("telescope.actions")
+      local action_state = require("telescope.actions.state")
+
+      -- Ctrl+o: Open the CURRENT browsed directory as the project root
+      local open_as_project = function()
+        local finder = action_state.get_current_picker(prompt_bufnr).finder
+        local dir = finder.path
+        if not dir then return end
+        actions.close(prompt_bufnr)
+        
+        -- Detach from current session to prevent overwriting it
+        vim.v.this_session = ""
+        
+        _G._project_root = dir
+        vim.cmd("cd " .. vim.fn.fnameescape(dir))
+        vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
+        vim.cmd("enew")
+      end
+
+      map("i", "<C-o>", open_as_project)
+      map("n", "<C-o>", open_as_project)
+      return true -- keep all default mappings
+    end,
+  })
+end, { noremap = true, silent = true, desc = "Directory Browser (Ctrl+o to open as project)" })
 
 -- =========================================================================
 -- THE NEW PROJECT / SESSION WORKFLOW
@@ -630,23 +703,42 @@ vim.keymap.set("n", "<leader>a", "<cmd>AerialToggle!<CR>", { noremap = true, sil
 -- RETURN TO DASHBOARD (Home)
 -- =========================================================================
 vim.keymap.set('n', '<leader>h', function()
-  vim.cmd("AutoSession save") -- Save current tabs
+  if vim.bo.filetype == "alpha" then return end
+  vim.cmd("silent! wall") -- Save all modified buffers first
+  -- Reset cwd to the tracked project root before saving
+  if _G._project_root and vim.fn.isdirectory(_G._project_root) == 1 then
+    vim.cmd("cd " .. vim.fn.fnameescape(_G._project_root))
+  end
+  vim.cmd("AutoSession save") -- Save current session
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
-      vim.cmd("bdelete " .. bufnr)
+      vim.cmd("bdelete! " .. bufnr)
     end
   end
+  vim.v.this_session = "" -- Clear session to prevent overwriting on next project
   vim.cmd("Alpha") -- Open Dashboard
 end, { noremap = true, silent = true, desc = "Save & Return to Dashboard" })
 
--- Test Runner (Neotest)
-vim.keymap.set("n", "<leader>tr", function() require("neotest").run.run() end, { desc = "Run Nearest Test" })
-vim.keymap.set("n", "<leader>tf", function() require("neotest").run.run(vim.fn.expand("%")) end, { desc = "Run Current File Tests" })
-vim.keymap.set("n", "<leader>to", function() require("neotest").output_panel.toggle() end, { desc = "Toggle Test Output" })
 
 -- File Tree Toggle
 local function toggle_tree_focus()
-  if vim.bo.filetype == "NvimTree" then vim.cmd("wincmd p") else vim.cmd("NvimTreeFocus") end
+  if vim.bo.filetype == "NvimTree" then
+    -- Find the first normal (non-sidebar) window to switch to,
+    -- instead of relying on wincmd p which fails when there is
+    -- no "previous window" (e.g. right after session restore).
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
+      local cfg = vim.api.nvim_win_get_config(win)
+      if cfg.relative == "" and ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" then
+        vim.api.nvim_set_current_win(win)
+        return
+      end
+    end
+    vim.cmd("wincmd p") -- fallback
+  else
+    vim.cmd("NvimTreeFocus")
+  end
 end
 vim.keymap.set({'n', 'i', 'v'}, '<C-M-e>', toggle_tree_focus, { noremap = true, silent = true, desc = "Toggle Tree Focus" })
 
@@ -677,14 +769,14 @@ local function get_normal_window_count()
 end
 
 vim.keymap.set('n', '<leader>w', function()
-  if vim.bo.filetype == "NvimTree" or vim.bo.filetype == "aerial" then return end
+  if vim.bo.filetype == "NvimTree" or vim.bo.filetype == "aerial" or vim.bo.filetype == "alpha" then return end
   if get_normal_window_count() > 1 then vim.cmd("close") else
     if not require("mini.bufremove").delete(0, false) then vim.cmd('bdelete!') end
   end
 end, { noremap = true, silent = true, desc = "Close Current File or Split Safely" })
 
 -- General Core Bindings
-vim.keymap.set('n', '<leader>q', ':qa<CR>', { noremap = true, silent = true })
+vim.keymap.set('n', '<leader>q', ':qa<CR>', { noremap = true, silent = true, desc = "Quit All" })
 vim.keymap.set({ 'n', 'i', 'v' }, '<C-s>', '<cmd>w<CR>', { noremap = true, silent = true })
 vim.keymap.set('n', '<C-z>', 'u', { noremap = true, silent = true })
 vim.keymap.set('i', '<C-z>', '<C-o>u', { noremap = true, silent = true })
@@ -707,7 +799,25 @@ vim.keymap.set('n', '<leader>o', function()
   if vim.fn.has('mac') == 1 then vim.fn.jobstart({ 'open', path }, { detach = true })
   elseif vim.fn.has('unix') == 1 then vim.fn.jobstart({ 'xdg-open', path }, { detach = true })
   elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', path }, { detach = true }) end
-end, { noremap = true, silent = true })
+end, { noremap = true, silent = true, desc = "Open in OS Explorer" })
+
+-- Auto-open binary files in OS viewer instead of Neovim
+vim.api.nvim_create_autocmd("BufReadPre", {
+  pattern = { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.pdf", "*.mp4", "*.mkv", "*.avi", "*.mp3", "*.zip", "*.tar", "*.gz" },
+  callback = function(args)
+    local path = vim.fn.expand(args.match)
+    if vim.fn.has('mac') == 1 then vim.fn.jobstart({ 'open', path }, { detach = true })
+    elseif vim.fn.has('unix') == 1 then vim.fn.jobstart({ 'xdg-open', path }, { detach = true })
+    elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', path }, { detach = true }) end
+    
+    -- Schedule buffer deletion so it doesn't interrupt the current event loop
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(args.buf) then
+        vim.api.nvim_buf_delete(args.buf, { force = true })
+      end
+    end)
+  end,
+})
 
 -- Open Git Remote in Browser
 vim.keymap.set('n', '<leader>G', function()
@@ -717,12 +827,12 @@ vim.keymap.set('n', '<leader>G', function()
   if vim.fn.has('mac') == 1 then vim.fn.jobstart({ 'open', url }, { detach = true })
   elseif vim.fn.has('unix') == 1 then vim.fn.jobstart({ 'xdg-open', url }, { detach = true })
   elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', url }, { detach = true }) end
-end, { noremap = true, silent = true })
+end, { noremap = true, silent = true, desc = "Open Git Remote" })
 
 -- Terminal Exit & Splits
 vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { noremap = true, silent = true })
-vim.keymap.set('n', '<leader>th', ':ToggleTerm direction=horizontal<CR>', { noremap = true, silent = true })
-vim.keymap.set('n', '<leader>tv', ':ToggleTerm direction=vertical size=40<CR>', { noremap = true, silent = true })
+vim.keymap.set('n', '<leader>th', ':ToggleTerm direction=horizontal<CR>', { noremap = true, silent = true, desc = "Terminal (Horizontal)" })
+vim.keymap.set('n', '<leader>tv', ':ToggleTerm direction=vertical size=40<CR>', { noremap = true, silent = true, desc = "Terminal (Vertical)" })
 
 -- Visual / Select Mode Overrides
 local modes = {'v', 's'}
@@ -751,26 +861,28 @@ vim.keymap.set('n', '<leader>U', function()
   print("Starting safe system update...")
   vim.cmd("Lazy update")
   vim.cmd("MasonToolsUpdate")
-end, { noremap = true, silent = true })
+end, { noremap = true, silent = true, desc = "Update Plugins & Tools" })
 
 -- =========================================================================
 -- 7. CODE EXECUTION
 -- =========================================================================
-vim.keymap.set('v', '<leader>r', ':<C-U>ToggleTermSendVisualLines<CR>', { noremap = true, silent = true })
-vim.keymap.set('n', '<leader>r', '<cmd>ToggleTermSendCurrentLine<CR><cmd>norm j<CR>', { noremap = true, silent = true })
+vim.keymap.set('v', '<leader>r', ':<C-U>ToggleTermSendVisualLines<CR>', { noremap = true, silent = true, desc = "Run Selected Lines" })
+vim.keymap.set('n', '<leader>r', '<cmd>ToggleTermSendCurrentLine<CR><cmd>norm j<CR>', { noremap = true, silent = true, desc = "Run Current Line" })
 
 vim.keymap.set('n', '<leader>R', function()
   local file = vim.fn.expand('%')
   local ext = vim.fn.expand('%:e')
+  local escaped = vim.fn.shellescape(file)
   vim.cmd("w") 
-  if ext == 'py' or ext == 'ipynb' then vim.cmd('TermExec cmd="uv run python ' .. file .. '"')
-  elseif ext == 'c' then vim.cmd('TermExec cmd="gcc ' .. file .. ' -o out && ./out"')
-  elseif ext == 'cpp' then vim.cmd('TermExec cmd="g++ ' .. file .. ' -o out && ./out"')
-  elseif ext == 'js' or ext == 'ts' then vim.cmd('TermExec cmd="node ' .. file .. '"')
+  if ext == 'py' or ext == 'ipynb' then vim.cmd('TermExec cmd="uv run python ' .. escaped .. '"')
+  elseif ext == 'c' then vim.cmd('TermExec cmd="gcc ' .. escaped .. ' -o out && ./out"')
+  elseif ext == 'cpp' then vim.cmd('TermExec cmd="g++ ' .. escaped .. ' -o out && ./out"')
+  elseif ext == 'js' or ext == 'ts' then vim.cmd('TermExec cmd="node ' .. escaped .. '"')
   elseif ext == 'rs' then vim.cmd('TermExec cmd="cargo run"')
-  elseif ext == 'go' then vim.cmd('TermExec cmd="go run ' .. file .. '"')
+  elseif ext == 'go' then vim.cmd('TermExec cmd="go run ' .. escaped .. '"')
+  elseif ext == 'java' then vim.cmd('TermExec cmd="javac ' .. escaped .. ' && java ' .. vim.fn.shellescape(vim.fn.expand('%:t:r')) .. '"')
   end
-end, { noremap = true, silent = true })
+end, { noremap = true, silent = true, desc = "Execute Current File" })
 
 -- =========================================================================
 -- 8. TERMINAL MULTIPLEXING
@@ -780,7 +892,7 @@ if status_ok then
   local Terminal = tt_api.Terminal
   local lazygit = Terminal:new({ cmd = "lazygit", hidden = true, direction = "float", float_opts = { border = "curved" } })
   function _lazygit_toggle() lazygit:toggle() end
-  vim.keymap.set('n', '<leader>gg', '<cmd>lua _lazygit_toggle()<CR>', { noremap = true, silent = true })
+  vim.keymap.set('n', '<leader>gg', '<cmd>lua _lazygit_toggle()<CR>', { noremap = true, silent = true, desc = "Toggle Lazygit" })
 
   local function get_terms()
       local terms = {}
