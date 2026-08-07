@@ -1,3 +1,9 @@
+-- Ensure ~/.local/bin is in PATH for external tools (jupytext, uv, etc.)
+local user_local_bin = vim.fn.expand("~/.local/bin")
+if not string.find(vim.env.PATH, user_local_bin, 1, true) then
+  vim.env.PATH = user_local_bin .. ":" .. vim.env.PATH
+end
+
 -- =========================================================================
 -- 1. BOOTSTRAP PLUGIN MANAGER (lazy.nvim)
 -- =========================================================================
@@ -159,6 +165,7 @@ require("lazy").setup({
       vim.api.nvim_create_autocmd("User", {
           pattern = "AlphaReady",
           callback = function()
+              vim.b.miniindentscope_disable = true
               for i = 1, #logo do dashboard.section.header.val[i] = "" end
               local row, col, pause_ticks = 1, 1, 0
               local info_typed, info_col = false, 1
@@ -276,16 +283,80 @@ require("lazy").setup({
     },
     config = function()
       require("aerial").setup({
-        layout = { max_width = { 40, 0.2 }, min_width = 25, default_direction = "right" },
-        filter_kind = { "Class", "Constructor", "Enum", "Function", "Interface", "Module", "Method", "Struct", "Variable" },
-        icons = { 
-           Class = "󰠱 ", Function = "󰊕 ", Method = "󰆧 ", Struct = "󰙅 ", Interface = " ", Module = "󰏗 ", Variable = "󰀫 "
+        -- Try LSP first, fall back to treesitter (covers markdown, etc.)
+        backends = { "lsp", "treesitter" },
+        layout = {
+          max_width = { 40, 0.2 },
+          min_width = 25,
+          default_direction = "right",
+          placement = "edge",
+          preserve_equality = true,
+        },
+        filter_kind = {
+          "Class", "Constructor", "Enum", "Function", "Interface",
+          "Module", "Method", "Struct", "Variable", "Constant",
+          "Field", "Property", "TypeParameter",
+        },
+        icons = {
+          Class = "󰠱 ", Function = "󰊕 ", Method = "󰆧 ",
+          Struct = "󰙅 ", Interface = " ", Module = "󰏗 ",
+          Variable = "󰀫 ", Constant = "󰏿 ", Field = "󰜢 ",
+          Property = "󰖷 ", TypeParameter = "󰗴 ",
         },
         show_guides = true,
+        guides = {
+          mid_item = "├─ ",
+          last_item = "└─ ",
+          nested_top = "│  ",
+          whitespace = "   ",
+        },
+        -- Highlight & auto-scroll to the current symbol as the cursor moves
+        highlight_on_hover = true,
+        autojump = true,
+        close_on_select = false,
+        -- Auto-close when entering a buffer with no symbol support
+        close_automatic_events = { "unsupported" },
+        -- Keymaps inside the aerial window
+        keymaps = {
+          ["<CR>"] = "actions.tree_toggle",  -- Enter collapses/expands nodes
+          ["o"] = "actions.jump",             -- 'o' to jump to symbol
+        },
+      })
+
+      -- Handle tab/buffer switches: re-open or close aerial as needed
+      vim.api.nvim_create_autocmd("BufEnter", {
+        callback = function(args)
+          local ft = vim.bo[args.buf].filetype
+          if ft == "" or ft == "aerial" or ft == "NvimTree" or ft == "alpha" or ft == "toggleterm" or ft == "trouble" then
+            return
+          end
+          -- If user explicitly closed aerial, keep it closed globally
+          if _G._aerial_user_closed then return end
+          vim.defer_fn(function()
+            if not vim.api.nvim_buf_is_valid(args.buf) then return end
+            if vim.api.nvim_get_current_buf() ~= args.buf then return end
+            local curr_ft = vim.bo[args.buf].filetype
+            if curr_ft == "" or curr_ft == "aerial" or curr_ft == "NvimTree" or curr_ft == "alpha" or curr_ft == "toggleterm" or curr_ft == "trouble" then
+              return
+            end
+            if _G._aerial_user_closed then return end
+            local ok, aerial = pcall(require, "aerial")
+            if not ok then return end
+            local ok_count, count = pcall(aerial.num_symbols, args.buf)
+            if ok_count and count and count > 0 then
+              if not aerial.is_open({ bufnr = args.buf }) then
+                pcall(aerial.open, { bufnr = args.buf, focus = false })
+              end
+            else
+              if aerial.is_open() then
+                pcall(aerial.close)
+              end
+            end
+          end, 300)
+        end,
       })
     end
   },
-
 
   -- Ultimate Searching & Fuzzy Finding (Telescope)
   {
@@ -336,6 +407,7 @@ require("lazy").setup({
 
       require("telescope").setup({
         defaults = {
+          borderchars = { "─", "│", "─", "│", "╭", "╮", "╯", "╰" },
           buffer_previewer_maker = new_maker,
           file_ignore_patterns = { ".git/", "node_modules/", "__pycache__/", ".venv/", "target/" },
           layout_config = { prompt_position = "top" },
@@ -371,6 +443,27 @@ require("lazy").setup({
           vim.keymap.set('n', 'q', '<cmd>wincmd p<CR>', { buffer = bufnr, noremap = true, silent = true, desc = "Return to code" })
         end,
         view = { width = 35, side = "left" },
+        renderer = {
+          indent_markers = {
+            enable = true,
+            inline_arrows = true,
+            icons = {
+              corner = "└",
+              edge = "│",
+              item = "├",
+              bottom = "─",
+              none = " ",
+            },
+          },
+          highlight_git = true,
+          highlight_opened_files = "all",
+          highlight_diagnostics = true,
+          icons = {
+            show = {
+              git = false, -- Disabled per request
+            },
+          },
+        },
         filters = { dotfiles = false, git_ignored = false },
       })
     end,
@@ -403,10 +496,24 @@ require("lazy").setup({
         install_dir = vim.fn.stdpath("data") .. "/site",
       })
       require("nvim-treesitter").install({
-        "javascript", "typescript", "c", "cpp", "python", "html",
+        "javascript", "typescript", "tsx", "jsdoc",
+        "c", "cpp", "python", "html",
         "css", "lua", "markdown", "rust", "toml",
         "go", "gomod", "gowork", "gosum", "gotmpl",
         "java",
+      })
+
+      -- The new nvim-treesitter (main branch) only installs parsers;
+      -- it does NOT enable highlighting automatically.
+      -- We must explicitly start treesitter highlighting for each buffer.
+      vim.api.nvim_create_autocmd("FileType", {
+        callback = function(args)
+          local ok = pcall(vim.treesitter.start, args.buf)
+          if ok then
+            -- Disable legacy regex syntax highlighting when treesitter is active
+            vim.bo[args.buf].syntax = ""
+          end
+        end,
       })
     end,
   },
@@ -419,10 +526,16 @@ require("lazy").setup({
         formatters_by_ft = {
           javascript = { "prettier" },
           typescript = { "prettier" },
+          javascriptreact = { "prettier" },
+          typescriptreact = { "prettier" },
+          css = { "prettier" },
+          html = { "prettier" },
+          json = { "prettier" },
+          yaml = { "prettier" },
+          markdown = { "prettier" },
           python = { "ruff_format" },
-          c = { "lsp_format" },
-          cpp = { "lsp_format" },
-          html = { "lsp_format" },
+          c = { "clang-format" },
+          cpp = { "clang-format" },
           rust = { "rustfmt" },
           go = { "goimports", "gofmt" },
           java = { "google-java-format" },
@@ -450,13 +563,17 @@ require("lazy").setup({
       local luasnip = require("luasnip")
 
       cmp.setup({
+        window = {
+          completion = cmp.config.window.bordered({ border = "rounded" }),
+          documentation = cmp.config.window.bordered({ border = "rounded" }),
+        },
         snippet = { expand = function(args) luasnip.lsp_expand(args.body) end },
         mapping = cmp.mapping.preset.insert({
           ["<C-b>"] = cmp.mapping.scroll_docs(-4),
           ["<C-f>"] = cmp.mapping.scroll_docs(4),
           ["<C-Space>"] = cmp.mapping.complete(),
           ["<C-e>"] = cmp.mapping.abort(),
-          ["<CR>"] = cmp.mapping.confirm({ select = true }),
+          ["<CR>"] = cmp.mapping.confirm({ select = false }),
           ["<Tab>"] = cmp.mapping(function(fallback)
             if cmp.visible() then cmp.select_next_item()
             elseif luasnip.expand_or_jumpable() then luasnip.expand_or_jump()
@@ -478,14 +595,14 @@ require("lazy").setup({
   },
 
   -- Mason and related tools for LSP management
-  { "williamboman/mason.nvim", cmd = "Mason", config = function() require("mason").setup() end },
+  { "williamboman/mason.nvim", config = function() require("mason").setup() end },
 
   {
     "WhoIsSethDaniel/mason-tool-installer.nvim",
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        ensure_installed = { "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "gopls", "goimports", "jdtls", "google-java-format" },
+        ensure_installed = { "prettier", "clang-format", "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "gopls", "goimports", "jdtls", "google-java-format" },
         auto_update = false,
         run_on_start = true,
       })
@@ -500,18 +617,48 @@ require("lazy").setup({
     keys = { { "<leader>xx", "<cmd>Trouble diagnostics toggle focus=true<CR>", desc = "Diagnostics / Errors (Trouble)" } },
   },
 
-  { "GCBallesteros/jupytext.nvim", config = function() require("jupytext").setup({ style = "light", output_extension = "py", force_ft = "python" }) end },
+
+  -- Inline Jupyter Notebook Cell Outputs & Execution (Molten)
+  {
+    "benlubas/molten-nvim",
+    version = "^1.0.0",
+    lazy = false,
+    build = ":UpdateRemotePlugins",
+    init = function()
+      vim.g.molten_image_provider = "image.nvim"
+      vim.g.molten_output_virt_lines = true
+      vim.g.molten_wrap_output = true
+      vim.g.molten_virt_text_output = true
+      vim.g.molten_auto_open_output = false
+      vim.g.molten_cover_empty_lines = true
+    end,
+    keys = {
+      { "<leader>mi", "<cmd>MoltenInit<CR>", desc = "Initialize Jupyter Kernel" },
+      { "<leader>rc", "<cmd>MoltenEvaluateCell<CR>", desc = "Evaluate Cell Inline" },
+      { "<leader>rd", "<cmd>MoltenDelete<CR>", desc = "Delete Cell Output" },
+      { "<leader>ro", "<cmd>MoltenShowOutput<CR>", desc = "Show Output Float Window" },
+      { "<leader>rr", "<cmd>MoltenReevaluateCell<CR>", desc = "Re-evaluate Cell" },
+      { "<leader>r", ":<C-u>MoltenEvaluateVisual<CR>", mode = "v", desc = "Evaluate Visual Selection Inline" },
+    },
+  },
+
   { "echasnovski/mini.bufremove", version = "*", config = function() require("mini.bufremove").setup() end },
   { "mechatroner/rainbow_csv", event = "BufRead" },
   {
     "nvim-lualine/lualine.nvim",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
-      require("lualine").setup({ options = { theme = "tokyonight", component_separators = '|', section_separators = '' } })
+      require("lualine").setup({
+        options = {
+          theme = "tokyonight",
+          component_separators = { left = '', right = '' },
+          section_separators = { left = '', right = '' },
+        }
+      })
     end,
   },
   { "echasnovski/mini.pairs", version = "*", config = function() require("mini.pairs").setup() end },
-  { "folke/which-key.nvim", event = "VeryLazy", config = function() require("which-key").setup({ delay = 500 }) end },
+  { "folke/which-key.nvim", event = "VeryLazy", config = function() require("which-key").setup({ delay = 500, win = { border = "rounded" } }) end },
   { "lewis6991/gitsigns.nvim", config = function() require("gitsigns").setup({ current_line_blame = true, current_line_blame_opts = { delay = 500, virt_text_pos = 'eol' } }) end },
   {
     "akinsho/toggleterm.nvim",
@@ -525,6 +672,156 @@ require("lazy").setup({
         end,
       })
     end,
+  },
+
+  -- Inline Image Viewer (Kitty Graphics Protocol)
+  {
+    "3rd/image.nvim",
+    event = "VeryLazy",
+    config = function()
+      require("image").setup({
+        backend = "kitty",
+        processor = "magick_cli",
+        max_width_window_percentage = 90,
+        max_height_window_percentage = 80,
+        window_overlap_clear_enabled = true,
+        window_overlap_clear_ft_ignore = { "cmp_menu", "cmp_docs", "aerial", "NvimTree", "" },
+        ignore_download_error = true,
+        hijack_file_patterns = { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.bmp", "*.tiff", "*.ico", "*.svg" },
+      })
+    end,
+  },
+
+  -- Modern In-Buffer Markdown Renderer (Ghostty & Kitty Protocol Compatible)
+  {
+    "MeanderingProgrammer/render-markdown.nvim",
+    ft = { "markdown" },
+    dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" },
+    opts = {
+      heading = {
+        enabled = true,
+        icons = { "󰲡 ", "󰲣 ", "󰲥 ", "󰲧 ", "󰲩 ", "󰲫 " },
+      },
+      checkbox = { enabled = true },
+      bullet = { enabled = true },
+    },
+    keys = {
+      { "<leader>mp", "<cmd>RenderMarkdown toggle<CR>", ft = "markdown", desc = "Toggle Markdown Render" },
+    },
+  },
+
+  -- =========================================================================
+  -- AESTHETICS & MOTION UPGRADES
+  -- =========================================================================
+
+  -- Smooth Animated Cursor Smear
+  {
+    "sphamba/smear-cursor.nvim",
+    event = "VeryLazy",
+    opts = {
+      cursor_color = "#7aa2f7",
+      stiffness = 0.8,
+      trailing_stiffness = 0.5,
+    },
+  },
+
+  -- Rounded Floating UI Inputs & Select Dialogs
+  {
+    "stevearc/dressing.nvim",
+    event = "VeryLazy",
+    opts = {
+      input = { border = "rounded" },
+      select = { backend = { "telescope", "builtin" }, builtin = { border = "rounded" } },
+    },
+  },
+
+  -- Animated Scope & Indent Guides
+  {
+    "echasnovski/mini.indentscope",
+    version = "*",
+    event = { "BufReadPre", "BufNewFile" },
+    opts = {
+      symbol = "│",
+      options = { try_as_border = true },
+    },
+    config = function(_, opts)
+      require("mini.indentscope").setup(opts)
+
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = {
+          "alpha",
+          "dashboard",
+          "fzf",
+          "help",
+          "lazy",
+          "mason",
+          "neo-tree",
+          "NvimTree",
+          "notify",
+          "toggleterm",
+          "trouble",
+          "checkhealth",
+          "aerial",
+        },
+        callback = function()
+          vim.b.miniindentscope_disable = true
+        end,
+      })
+    end,
+  },
+
+  -- IDE Breadcrumb Navigation Winbar
+  {
+    "Bekaboo/dropbar.nvim",
+    event = { "BufReadPre", "BufNewFile" },
+  },
+
+  -- Modern Floating Cmdline, Notifications & Messages
+  {
+    "folke/noice.nvim",
+    event = "VeryLazy",
+    dependencies = { "MunifTanjim/nui.nvim", "rcarriga/nvim-notify" },
+    opts = {
+      lsp = {
+        override = {
+          ["vim.lsp.util.convert_input_to_markdown_lines"] = true,
+          ["vim.lsp.util.styled_parts"] = true,
+          ["cmp.entry.get_documentation"] = true,
+        },
+      },
+      presets = {
+        bottom_search = true,
+        command_palette = true,
+        long_message_to_split = true,
+        lsp_doc_border = true,
+      },
+    },
+  },
+
+  -- Real-Time Color Code Swatches
+  {
+    "brenoprata10/nvim-highlight-colors",
+    event = "BufReadPre",
+    opts = {
+      render = "background",
+      enable_named_colors = true,
+      enable_tail_wind = true,
+    },
+  },
+
+
+  -- Sleek Diagnostic & Git Scrollbar
+  {
+    "petertriho/nvim-scrollbar",
+    event = "BufReadPre",
+    opts = {
+      handlers = {
+        cursor = true,
+        diagnostic = true,
+        gitsigns = true,
+        search = false,
+      },
+    },
   },
 
 }, {
@@ -545,16 +842,36 @@ vim.lsp.config("html", {})
 vim.lsp.config("ts_ls", {})  
 
 vim.lsp.config("clangd", { cmd = { "clangd" }, filetypes = { "c", "cpp", "objc", "objcpp" } })
+local basedpyright_analysis = {
+  autoSearchPaths = true,
+  useLibraryCodeForTypes = true,
+  diagnosticMode = "openFilesOnly",
+  typeCheckingMode = "standard",
+  reportMissingTypeStubs = "none",
+  reportUnknownMemberType = "none",
+  reportUnusedCallResult = "none",
+  reportUnknownArgumentType = "none",
+  reportUnknownVariableType = "none",
+}
+
 vim.lsp.config("basedpyright", {
   cmd = { "basedpyright-langserver", "--stdio" },
   filetypes = { "python" },
+  root_markers = { "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", "pyrightconfig.json", ".git" },
+  before_init = function(_, config)
+    local venv = vim.fs.joinpath(config.root_dir or vim.fn.getcwd(), ".venv")
+    if vim.fn.isdirectory(venv) == 1 then
+      config.settings = config.settings or {}
+      config.settings.python = config.settings.python or {}
+      config.settings.python.pythonPath = vim.fs.joinpath(venv, "bin", "python")
+    end
+  end,
   settings = {
     basedpyright = {
-      analysis = {
-        autoSearchPaths = true,
-        useLibraryCodeForTypes = true,
-        diagnosticMode = "openFilesOnly",
-      },
+      analysis = basedpyright_analysis,
+    },
+    python = {
+      analysis = basedpyright_analysis,
     },
   },
 })
@@ -611,7 +928,18 @@ vim.api.nvim_create_autocmd("LspAttach", {
     local opts = { buffer = bufnr, silent = true }
     
     vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
-    vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
+    vim.keymap.set("n", "<C-]>", vim.lsp.buf.definition, { buffer = bufnr, silent = true, desc = "LSP Go to Definition" })
+
+    local function show_references()
+      local ok, builtin = pcall(require, "telescope.builtin")
+      if ok then
+        builtin.lsp_references({ show_line = true })
+      else
+        vim.lsp.buf.references()
+      end
+    end
+
+    vim.keymap.set("n", "gr", show_references, { buffer = bufnr, silent = true, desc = "LSP Go to References (Telescope)" })
     vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
     vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, { buffer = bufnr, silent = true, desc = "Code Action" })
     vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, { buffer = bufnr, silent = true, desc = "Rename Symbol" })
@@ -635,9 +963,194 @@ vim.opt.keymodel = "startsel,stopsel"
 vim.opt.selectmode = "key,mouse"
 vim.opt.ignorecase = true  
 vim.opt.smartcase = true   
-vim.opt.incsearch = true   
+vim.opt.updatetime = 300   -- Fast CursorHold trigger for diagnostic popups
 
-vim.diagnostic.config({ virtual_text = { severity = vim.diagnostic.severity.ERROR }, signs = true, underline = true, update_in_insert = true })
+vim.diagnostic.config({
+  float = {
+    focusable = false,
+    style = "minimal",
+    border = "rounded",
+    source = "always",
+    header = { " Diagnostics", "Bold" },
+    prefix = function(diagnostic)
+      if diagnostic.severity == vim.diagnostic.severity.ERROR then
+        return "󰅚 ", "DiagnosticSignError"
+      elseif diagnostic.severity == vim.diagnostic.severity.WARN then
+        return "󰀦 ", "DiagnosticSignWarn"
+      elseif diagnostic.severity == vim.diagnostic.severity.INFO then
+        return "󰋼 ", "DiagnosticSignInfo"
+      else
+        return "󰌵 ", "DiagnosticSignHint"
+      end
+    end,
+  },
+  virtual_text = { severity = vim.diagnostic.severity.ERROR },
+  signs = true,
+  underline = true,
+  update_in_insert = false,
+})
+
+-- Auto-show floating diagnostic popup ONLY when cursor rests on a line with errors/warnings
+vim.api.nvim_create_autocmd("CursorHold", {
+  pattern = "*",
+  callback = function()
+    local ft = vim.bo.filetype
+    if ft == "" or ft == "NvimTree" or ft == "aerial" or ft == "toggleterm" or ft == "trouble" or ft == "alpha" or ft == "lazy" or ft == "mason" then
+      return
+    end
+
+    local lnum = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local diagnostics = vim.diagnostic.get(0, { lnum = lnum })
+
+    if #diagnostics > 0 then
+      vim.diagnostic.open_float(nil, {
+        focus = false,
+        scope = "line",
+      })
+    end
+  end,
+})
+
+-- =========================================================================
+-- JUPYTEXT (.ipynb <-> .py) AUTOMATIC CONVERSION
+-- =========================================================================
+local jupytext_group = vim.api.nvim_create_augroup("JupytextSync", { clear = true })
+
+local function get_jupytext_cmd(sub_args)
+  local local_bin = vim.fn.expand("~/.local/bin/jupytext")
+  local cmd = {}
+  if vim.fn.executable("jupytext") == 1 then
+    table.insert(cmd, "jupytext")
+  elseif vim.fn.executable(local_bin) == 1 then
+    table.insert(cmd, local_bin)
+  elseif vim.fn.executable("uvx") == 1 then
+    table.insert(cmd, "uvx")
+    table.insert(cmd, "jupytext")
+  else
+    table.insert(cmd, local_bin)
+  end
+  for _, arg in ipairs(sub_args) do
+    table.insert(cmd, arg)
+  end
+  return cmd
+end
+
+local function get_nbconvert_cmd(file)
+  local local_bin = vim.fn.expand("~/.local/bin/jupyter")
+  if vim.fn.executable("jupyter") == 1 then
+    return { "jupyter", "nbconvert", "--to", "notebook", "--nbformat", "4", "--inplace", file }
+  elseif vim.fn.executable(local_bin) == 1 then
+    return { local_bin, "nbconvert", "--to", "notebook", "--nbformat", "4", "--inplace", file }
+  elseif vim.fn.executable("jupyter-nbconvert") == 1 then
+    return { "jupyter-nbconvert", "--to", "notebook", "--nbformat", "4", "--inplace", file }
+  elseif vim.fn.executable("uvx") == 1 then
+    return { "uvx", "--from", "nbconvert", "jupyter-nbconvert", "--to", "notebook", "--nbformat", "4", "--inplace", file }
+  else
+    return { "jupyter", "nbconvert", "--to", "notebook", "--nbformat", "4", "--inplace", file }
+  end
+end
+
+vim.api.nvim_create_autocmd({ "BufReadCmd" }, {
+  group = jupytext_group,
+  pattern = "*.ipynb",
+  callback = function(args)
+    local file = args.file
+    local cmd = get_jupytext_cmd({ "--to", "py:percent", "--output", "-", file })
+    local out = vim.fn.system(cmd)
+    if vim.v.shell_error ~= 0 or out == "" then
+      local fname = vim.fn.fnamemodify(file, ":t")
+      vim.notify("Jupytext failed to convert " .. fname .. ":\n" .. (out ~= "" and out or "Empty output"), vim.log.levels.WARN)
+
+      vim.schedule(function()
+        local nb_cmd_display = 'jupyter nbconvert --to notebook --nbformat 4 --inplace "' .. fname .. '"'
+        local options = {
+          "Run: " .. nb_cmd_display,
+          "Cancel"
+        }
+
+        vim.ui.select(options, {
+          prompt = "[Jupytext Error] Format version incompatible.\nPress ENTER to run nbconvert, ESC to cancel:",
+        }, function(choice, idx)
+          if idx == 1 then
+            local conv_cmd = get_nbconvert_cmd(file)
+            vim.notify("Upgrading notebook format for " .. fname .. "...", vim.log.levels.INFO)
+            local conv_out = vim.fn.system(conv_cmd)
+            if vim.v.shell_error == 0 then
+              vim.notify("Successfully upgraded " .. fname .. " to nbformat 4! Reloading...", vim.log.levels.INFO)
+              local retry_cmd = get_jupytext_cmd({ "--to", "py:percent", "--output", "-", file })
+              local retry_out = vim.fn.system(retry_cmd)
+              if vim.v.shell_error == 0 and retry_out ~= "" then
+                local lines = vim.split(retry_out, "\n", { trimempty = false })
+                if vim.api.nvim_buf_is_valid(args.buf) then
+                  vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
+                  vim.bo[args.buf].filetype = "python"
+                  vim.bo[args.buf].modified = false
+                end
+              else
+                vim.notify("Jupytext conversion failed after upgrade: " .. retry_out, vim.log.levels.ERROR)
+              end
+            else
+              vim.notify("nbconvert failed:\n" .. conv_out, vim.log.levels.ERROR)
+            end
+          else
+            vim.notify("Notebook format upgrade cancelled.", vim.log.levels.WARN)
+          end
+        end)
+      end)
+      return
+    end
+
+    local raw_lines = vim.split(out, "\n", { trimempty = false })
+    local lines = {}
+    local in_frontmatter = false
+    for i, line in ipairs(raw_lines) do
+      if i == 1 and line == "# ---" then
+        in_frontmatter = true
+      elseif in_frontmatter and line == "# ---" then
+        in_frontmatter = false
+      elseif not in_frontmatter then
+        table.insert(lines, line)
+      end
+    end
+    while #lines > 0 and lines[1] == "" do
+      table.remove(lines, 1)
+    end
+
+    vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
+    vim.bo[args.buf].filetype = "python"
+    vim.bo[args.buf].modified = false
+  end,
+})
+
+vim.api.nvim_create_autocmd({ "BufWriteCmd" }, {
+  group = jupytext_group,
+  pattern = "*.ipynb",
+  callback = function(args)
+    local file = args.file
+    local lines = vim.api.nvim_buf_get_lines(args.buf, 0, -1, false)
+    local content = table.concat(lines, "\n")
+    local cmd = get_jupytext_cmd({ "--from", "py:percent", "--to", "ipynb", "--output", file, "-" })
+    local out = vim.fn.system(cmd, content)
+    if vim.v.shell_error ~= 0 then
+      vim.notify("Jupytext failed to save " .. file .. ": " .. out, vim.log.levels.ERROR)
+      return
+    end
+    vim.bo[args.buf].modified = false
+  end,
+})
+
+-- Rounded borders for LSP floating windows
+vim.lsp.handlers["textDocument/hover"] = function(err, result, ctx, config)
+  config = config or {}
+  config.border = "rounded"
+  return vim.lsp.handlers.hover(err, result, ctx, config)
+end
+
+vim.lsp.handlers["textDocument/signatureHelp"] = function(err, result, ctx, config)
+  config = config or {}
+  config.border = "rounded"
+  return vim.lsp.handlers.signature_help(err, result, ctx, config)
+end
 
 -- =========================================================================
 -- 5. CUSTOM KEYBINDINGS & COMMANDS
@@ -697,13 +1210,39 @@ vim.keymap.set('n', '<leader>p', ':AutoSession search<CR>', { noremap = true, si
 vim.keymap.set('n', '<leader>fp', ':Telescope projects<CR>', { noremap = true, silent = true, desc = "Find New Project Folders" })
 
 -- THE SIDEBAR (Aerial Code Outline)
-vim.keymap.set("n", "<leader>a", "<cmd>AerialToggle!<CR>", { noremap = true, silent = true, desc = "Toggle Code Structure Sidebar" })
+vim.keymap.set("n", "<leader>a", function()
+  -- If we're in a sidebar, switch to the code window first
+  local ft = vim.bo.filetype
+  if ft == "NvimTree" or ft == "aerial" or ft == "toggleterm" or ft == "trouble" then
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      local wft = vim.api.nvim_get_option_value("filetype", { buf = buf })
+      local cfg = vim.api.nvim_win_get_config(win)
+      if cfg.relative == "" and wft ~= "NvimTree" and wft ~= "aerial" and wft ~= "toggleterm" and wft ~= "trouble" and wft ~= "alpha" then
+        vim.api.nvim_set_current_win(win)
+        break
+      end
+    end
+  end
+
+  local aerial = require("aerial")
+  if aerial.is_open() then
+    -- User is manually closing — stays closed until explicitly reopened
+    _G._aerial_user_closed = true
+    aerial.close()
+  else
+    -- User is manually opening — clear the global flag
+    _G._aerial_user_closed = false
+    aerial.open({ focus = false })
+  end
+end, { noremap = true, silent = true, desc = "Toggle Code Structure Sidebar" })
 
 -- =========================================================================
 -- RETURN TO DASHBOARD (Home)
 -- =========================================================================
 vim.keymap.set('n', '<leader>h', function()
   if vim.bo.filetype == "alpha" then return end
+  pcall(function() require("aerial").close() end)
   vim.cmd("silent! wall") -- Save all modified buffers first
   -- Reset cwd to the tracked project root before saving
   if _G._project_root and vim.fn.isdirectory(_G._project_root) == 1 then
@@ -720,27 +1259,83 @@ vim.keymap.set('n', '<leader>h', function()
 end, { noremap = true, silent = true, desc = "Save & Return to Dashboard" })
 
 
--- File Tree Toggle
-local function toggle_tree_focus()
-  if vim.bo.filetype == "NvimTree" then
-    -- Find the first normal (non-sidebar) window to switch to,
-    -- instead of relying on wincmd p which fails when there is
-    -- no "previous window" (e.g. right after session restore).
+-- Cycle Focus: Forward and Reverse between NvimTree, Active File, and Aerial (Code Structure)
+local function cycle_panel_focus(reverse)
+  local current_ft = vim.bo.filetype
+
+  -- Helper: find the first normal (non-sidebar) code window
+  local function find_code_win()
     for _, win in ipairs(vim.api.nvim_list_wins()) do
       local buf = vim.api.nvim_win_get_buf(win)
       local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
       local cfg = vim.api.nvim_win_get_config(win)
-      if cfg.relative == "" and ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" then
-        vim.api.nvim_set_current_win(win)
-        return
+      if cfg.relative == "" and ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" and ft ~= "alpha" then
+        return win
       end
     end
-    vim.cmd("wincmd p") -- fallback
+    return nil
+  end
+
+  -- Helper: find the aerial window (if open)
+  local function find_aerial_win()
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
+      local cfg = vim.api.nvim_win_get_config(win)
+      if cfg.relative == "" and ft == "aerial" then
+        return win
+      end
+    end
+    return nil
+  end
+
+  local aerial_win = find_aerial_win()
+  local code_win = find_code_win()
+
+  if reverse then
+    -- Reverse direction: NvimTree -> Aerial -> Code -> NvimTree
+    if current_ft == "NvimTree" then
+      if aerial_win then
+        vim.api.nvim_set_current_win(aerial_win)
+      elseif code_win then
+        vim.api.nvim_set_current_win(code_win)
+      end
+    elseif current_ft == "aerial" then
+      if code_win then
+        vim.api.nvim_set_current_win(code_win)
+      else
+        vim.cmd("wincmd p")
+      end
+    else
+      vim.cmd("NvimTreeFocus")
+    end
   else
-    vim.cmd("NvimTreeFocus")
+    -- Forward direction: NvimTree -> Code -> Aerial -> NvimTree
+    if current_ft == "NvimTree" then
+      if code_win then
+        vim.api.nvim_set_current_win(code_win)
+      else
+        vim.cmd("wincmd p")
+      end
+    elseif current_ft == "aerial" then
+      vim.cmd("NvimTreeFocus")
+    else
+      if aerial_win then
+        vim.api.nvim_set_current_win(aerial_win)
+      else
+        vim.cmd("NvimTreeFocus")
+      end
+    end
   end
 end
-vim.keymap.set({'n', 'i', 'v'}, '<C-M-e>', toggle_tree_focus, { noremap = true, silent = true, desc = "Toggle Tree Focus" })
+
+vim.keymap.set({'n', 'i', 'v'}, '<C-M-e>', function() cycle_panel_focus(false) end, { noremap = true, silent = true, desc = "Cycle Focus Forward: File -> Structure -> Tree" })
+vim.keymap.set({'n', 'i', 'v'}, '<C-M-S-e>', function() cycle_panel_focus(true) end, { noremap = true, silent = true, desc = "Cycle Focus Reverse: File -> Tree -> Structure" })
+vim.keymap.set({'n', 'i', 'v'}, '<C-A-S-e>', function() cycle_panel_focus(true) end, { noremap = true, silent = true, desc = "Cycle Focus Reverse: File -> Tree -> Structure" })
+
+-- Clean fallback shortcuts (Alt+e / Alt+Shift+e) for terminals that don't pass Ctrl+Alt+Shift
+vim.keymap.set({'n', 'i', 'v'}, '<M-e>', function() cycle_panel_focus(false) end, { noremap = true, silent = true, desc = "Cycle Focus Forward: File -> Structure -> Tree" })
+vim.keymap.set({'n', 'i', 'v'}, '<M-S-e>', function() cycle_panel_focus(true) end, { noremap = true, silent = true, desc = "Cycle Focus Reverse: File -> Tree -> Structure" })
 
 -- Buffer Navigation
 vim.keymap.set('n', '<Tab>', '<cmd>BufferLineCycleNext<CR>', { noremap = true, silent = true, desc = "Next File Tab" })
@@ -801,16 +1396,16 @@ vim.keymap.set('n', '<leader>o', function()
   elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', path }, { detach = true }) end
 end, { noremap = true, silent = true, desc = "Open in OS Explorer" })
 
--- Auto-open binary files in OS viewer instead of Neovim
+
+-- Auto-open non-image binary files in OS viewer
 vim.api.nvim_create_autocmd("BufReadPre", {
-  pattern = { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.pdf", "*.mp4", "*.mkv", "*.avi", "*.mp3", "*.zip", "*.tar", "*.gz" },
+  pattern = { "*.pdf", "*.mp4", "*.mkv", "*.avi", "*.mp3", "*.zip", "*.tar", "*.gz" },
   callback = function(args)
     local path = vim.fn.expand(args.match)
     if vim.fn.has('mac') == 1 then vim.fn.jobstart({ 'open', path }, { detach = true })
     elseif vim.fn.has('unix') == 1 then vim.fn.jobstart({ 'xdg-open', path }, { detach = true })
     elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', path }, { detach = true }) end
-    
-    -- Schedule buffer deletion so it doesn't interrupt the current event loop
+
     vim.schedule(function()
       if vim.api.nvim_buf_is_valid(args.buf) then
         vim.api.nvim_buf_delete(args.buf, { force = true })
@@ -863,26 +1458,6 @@ vim.keymap.set('n', '<leader>U', function()
   vim.cmd("MasonToolsUpdate")
 end, { noremap = true, silent = true, desc = "Update Plugins & Tools" })
 
--- =========================================================================
--- 7. CODE EXECUTION
--- =========================================================================
-vim.keymap.set('v', '<leader>r', ':<C-U>ToggleTermSendVisualLines<CR>', { noremap = true, silent = true, desc = "Run Selected Lines" })
-vim.keymap.set('n', '<leader>r', '<cmd>ToggleTermSendCurrentLine<CR><cmd>norm j<CR>', { noremap = true, silent = true, desc = "Run Current Line" })
-
-vim.keymap.set('n', '<leader>R', function()
-  local file = vim.fn.expand('%')
-  local ext = vim.fn.expand('%:e')
-  local escaped = vim.fn.shellescape(file)
-  vim.cmd("w") 
-  if ext == 'py' or ext == 'ipynb' then vim.cmd('TermExec cmd="uv run python ' .. escaped .. '"')
-  elseif ext == 'c' then vim.cmd('TermExec cmd="gcc ' .. escaped .. ' -o out && ./out"')
-  elseif ext == 'cpp' then vim.cmd('TermExec cmd="g++ ' .. escaped .. ' -o out && ./out"')
-  elseif ext == 'js' or ext == 'ts' then vim.cmd('TermExec cmd="node ' .. escaped .. '"')
-  elseif ext == 'rs' then vim.cmd('TermExec cmd="cargo run"')
-  elseif ext == 'go' then vim.cmd('TermExec cmd="go run ' .. escaped .. '"')
-  elseif ext == 'java' then vim.cmd('TermExec cmd="javac ' .. escaped .. ' && java ' .. vim.fn.shellescape(vim.fn.expand('%:t:r')) .. '"')
-  end
-end, { noremap = true, silent = true, desc = "Execute Current File" })
 
 -- =========================================================================
 -- 8. TERMINAL MULTIPLEXING
