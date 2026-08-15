@@ -1,8 +1,16 @@
--- Ensure ~/.local/bin is in PATH for external tools (jupytext, uv, etc.)
-local user_local_bin = vim.fn.expand("~/.local/bin")
-if not string.find(vim.env.PATH, user_local_bin, 1, true) then
-  vim.env.PATH = user_local_bin .. ":" .. vim.env.PATH
+-- Ensure ~/.local/bin and ~/go/bin are in PATH across all operating systems (Linux, macOS, Windows)
+local is_win = vim.fn.has("win32") == 1
+local path_sep = is_win and ";" or ":"
+local extra_paths = {
+  vim.fn.expand("~/.local/bin"),
+  vim.fn.expand("~/go/bin"),
+}
+for _, p in ipairs(extra_paths) do
+  if vim.fn.isdirectory(p) == 1 and not string.find(vim.env.PATH, p, 1, true) then
+    vim.env.PATH = p .. path_sep .. vim.env.PATH
+  end
 end
+
 
 -- =========================================================================
 -- 1. BOOTSTRAP PLUGIN MANAGER (lazy.nvim)
@@ -277,6 +285,7 @@ require("lazy").setup({
   -- Code Outline Sidebar (Aerial)
   {
     "stevearc/aerial.nvim",
+    lazy = false,
     dependencies = {
        "nvim-treesitter/nvim-treesitter",
        "nvim-tree/nvim-web-devicons"
@@ -292,16 +301,47 @@ require("lazy").setup({
           placement = "edge",
           preserve_equality = true,
         },
+        open_automatic = function(bufnr)
+          if _G._aerial_user_closed then return false end
+          local ft = vim.bo[bufnr].filetype
+          if ft == "" or ft == "aerial" or ft == "NvimTree" or ft == "alpha" or ft == "toggleterm" or ft == "trouble" then
+            return false
+          end
+          return true
+        end,
+        on_first_symbols = function(bufnr)
+          if _G._aerial_user_closed then return end
+          local curr_buf = vim.api.nvim_get_current_buf()
+          if bufnr == curr_buf then
+            local ft = vim.bo[bufnr].filetype
+            if ft ~= "" and ft ~= "aerial" and ft ~= "NvimTree" and ft ~= "alpha" and ft ~= "toggleterm" and ft ~= "trouble" then
+              local aerial = require("aerial")
+              if not aerial.is_open({ bufnr = bufnr }) then
+                pcall(aerial.open, { bufnr = bufnr, focus = false })
+              end
+            end
+          end
+        end,
         filter_kind = {
-          "Class", "Constructor", "Enum", "Function", "Interface",
-          "Module", "Method", "Struct", "Variable", "Constant",
-          "Field", "Property", "TypeParameter",
+          _ = {
+            "Class", "Constructor", "Enum", "Function", "Interface",
+            "Module", "Method", "Struct", "Variable", "Constant",
+            "Field", "Property", "TypeParameter",
+          },
+          markdown = false,
+          help = false,
+          tex = false,
+          latex = false,
+          plaintex = false,
         },
         icons = {
           Class = "󰠱 ", Function = "󰊕 ", Method = "󰆧 ",
           Struct = "󰙅 ", Interface = " ", Module = "󰏗 ",
           Variable = "󰀫 ", Constant = "󰏿 ", Field = "󰜢 ",
           Property = "󰖷 ", TypeParameter = "󰗴 ",
+          String = "󰅳 ", File = "󰈙 ", Package = "󰏖 ",
+          Namespace = "󰌗 ", Array = "󰅪 ", Object = "󰅩 ",
+          Key = "󰌋 ", Number = "󰎠 ", Boolean = "󰨙 ",
         },
         show_guides = true,
         guides = {
@@ -348,7 +388,12 @@ require("lazy").setup({
                 pcall(aerial.open, { bufnr = args.buf, focus = false })
               end
             else
-              if aerial.is_open() then
+              local backends = require("aerial.backends").get_status(args.buf)
+              local has_supported = false
+              for _, b in ipairs(backends or {}) do
+                if b.supported then has_supported = true; break end
+              end
+              if not has_supported and aerial.is_open() then
                 pcall(aerial.close)
               end
             end
@@ -365,7 +410,8 @@ require("lazy").setup({
     dependencies = { 
         "nvim-lua/plenary.nvim", 
         "nvim-tree/nvim-web-devicons",
-        "nvim-telescope/telescope-file-browser.nvim"
+        "nvim-telescope/telescope-file-browser.nvim",
+        { "nvim-telescope/telescope-fzf-native.nvim", build = "cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release" }
     },
     config = function()
       local actions = require("telescope.actions")
@@ -407,6 +453,15 @@ require("lazy").setup({
 
       require("telescope").setup({
         defaults = {
+          vimgrep_arguments = {
+            "rg",
+            "--color=never",
+            "--no-heading",
+            "--with-filename",
+            "--line-number",
+            "--column",
+            "--smart-case"
+          },
           borderchars = { "─", "│", "─", "│", "╭", "╮", "╯", "╰" },
           buffer_previewer_maker = new_maker,
           file_ignore_patterns = { ".git/", "node_modules/", "__pycache__/", ".venv/", "target/" },
@@ -415,18 +470,32 @@ require("lazy").setup({
           mappings = {
             i = {
               ["<C-e>"] = open_in_tree, -- Press Ctrl+e in any telescope window to jump to the tree
+              ["<Esc>"] = actions.close,
             },
             n = {
               ["<C-e>"] = open_in_tree,
+              ["<Esc>"] = actions.close,
             }
+          }
+        },
+        pickers = {
+          find_files = {
+            find_command = { "fd", "--type", "f", "--strip-cwd-prefix" }
           }
         },
         extensions = {
           file_browser = { theme = "ivy", hijack_netrw = true },
+          fzf = {
+            fuzzy = true,
+            override_generic_sorter = true,
+            override_file_sorter = true,
+            case_mode = "smart_case",
+          },
         }
       })
       require("telescope").load_extension("projects")
       require("telescope").load_extension("file_browser") 
+      pcall(require("telescope").load_extension, "fzf")
     end,
   },
 
@@ -443,6 +512,12 @@ require("lazy").setup({
           vim.keymap.set('n', 'q', '<cmd>wincmd p<CR>', { buffer = bufnr, noremap = true, silent = true, desc = "Return to code" })
         end,
         view = { width = 35, side = "left" },
+        filesystem_watchers = {
+          enable = true,
+          debounce_delay = 50,
+          ignore_dirs = {},
+          max_events = 0, -- Set to 0 (unlimited) to prevent disabling watcher during directory deletions on Windows; matches Linux default
+        },
         renderer = {
           indent_markers = {
             enable = true,
@@ -500,7 +575,7 @@ require("lazy").setup({
         "c", "cpp", "python", "html",
         "css", "lua", "markdown", "rust", "toml",
         "go", "gomod", "gowork", "gosum", "gotmpl",
-        "java",
+        "java", "latex", "bibtex",
       })
 
       -- The new nvim-treesitter (main branch) only installs parsers;
@@ -540,7 +615,7 @@ require("lazy").setup({
           go = { "goimports", "gofmt" },
           java = { "google-java-format" },
         },
-        format_on_save = { timeout_ms = 1000, lsp_format = "fallback" },
+        format_on_save = { timeout_ms = vim.fn.has("win32") == 1 and 3000 or 1000, lsp_format = "fallback" },
         formatters = {
           prettier = { prepend_args = { "--use-tabs", "--tab-width", "4", "--no-semi" } },
         },
@@ -602,7 +677,7 @@ require("lazy").setup({
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        ensure_installed = { "prettier", "clang-format", "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "gopls", "goimports", "jdtls", "google-java-format" },
+        ensure_installed = { "prettier", "clang-format", "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "gopls", "goimports", "delve", "jdtls", "google-java-format", "texlab" },
         auto_update = false,
         run_on_start = true,
       })
@@ -614,8 +689,213 @@ require("lazy").setup({
     "folke/trouble.nvim",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     opts = { modes = { diagnostics = { auto_preview = true } } },
-    keys = { { "<leader>xx", "<cmd>Trouble diagnostics toggle focus=true<CR>", desc = "Diagnostics / Errors (Trouble)" } },
+    keys = {
+      {
+        "<leader>xx",
+        function()
+          local trouble = require("trouble")
+          if trouble.is_open() then
+            trouble.close()
+            return
+          end
+
+          local diags = vim.diagnostic.get(0)
+          if #diags == 0 then
+            vim.notify("No diagnostics in active file", vim.log.levels.INFO, { title = "Diagnostics" })
+            return
+          end
+
+          trouble.open({ mode = "diagnostics", focus = true })
+        end,
+        desc = "Diagnostics / Errors (Trouble)",
+      },
+    },
   },
+
+  -- =========================================================================
+  -- DEBUG ADAPTER PROTOCOL (DAP) & GO DEBUGGING (Delve)
+  -- =========================================================================
+  {
+    "mfussenegger/nvim-dap",
+    dependencies = {
+      {
+        "rcarriga/nvim-dap-ui",
+        dependencies = { "nvim-neotest/nvim-nio" },
+      },
+      "theHamsta/nvim-dap-virtual-text",
+      "leoluz/nvim-dap-go",
+    },
+    config = function()
+      local dap = require("dap")
+      local dapui = require("dapui")
+      local dap_go = require("dap-go")
+      local dap_vt = require("nvim-dap-virtual-text")
+
+      -- Setup inline virtual text for variable inspection during debugging
+      dap_vt.setup({
+        commented = true,
+        highlight_changed_variables = true,
+        show_stop_reason = true,
+      })
+
+      -- Setup DAP UI with rich debugger layout
+      dapui.setup({
+        icons = { expanded = "▾", collapsed = "▸", current_frame = "▸" },
+        mappings = {
+          expand = { "<CR>", "<2-LeftMouse>" },
+          open = "o",
+          remove = "d",
+          edit = "e",
+          repl = "r",
+          toggle = "t",
+        },
+        layouts = {
+          {
+            elements = {
+              { id = "scopes", size = 0.25 },
+              { id = "breakpoints", size = 0.25 },
+              { id = "stacks", size = 0.25 },
+              { id = "watches", size = 0.25 },
+            },
+            position = "left",
+            size = 40,
+          },
+          {
+            elements = {
+              { id = "repl", size = 0.5 },
+              { id = "console", size = 0.5 },
+            },
+            position = "bottom",
+            size = 10,
+          },
+        },
+        floating = {
+          border = "rounded",
+          mappings = {
+            close = { "q", "<Esc>" },
+          },
+        },
+      })
+
+      -- Helper to find the actual delve binary executable (handles Windows .cmd vs .exe, Mason, GOPATH, and Unix)
+      local function get_delve_path()
+        local is_win = vim.fn.has("win32") == 1
+        local ext = is_win and ".exe" or ""
+
+        -- 1. Check Mason packages directory (direct binary, bypassing Windows .CMD wrappers)
+        local mason_pkg = vim.fs.joinpath(vim.fn.stdpath("data"), "mason", "packages", "delve", "dlv" .. ext)
+        if vim.uv.fs_stat(mason_pkg) then
+          return mason_pkg
+        end
+
+        -- 2. Check ~/go/bin
+        local go_bin = vim.fs.joinpath(vim.fn.expand("~/go/bin"), "dlv" .. ext)
+        if vim.uv.fs_stat(go_bin) then
+          return go_bin
+        end
+
+        -- 3. Check GOPATH/bin if set
+        if vim.env.GOPATH then
+          local gopath_bin = vim.fs.joinpath(vim.env.GOPATH, "bin", "dlv" .. ext)
+          if vim.uv.fs_stat(gopath_bin) then
+            return gopath_bin
+          end
+        end
+
+        -- 4. Check system exepath (if it's an .exe or binary directly)
+        local sys_path = vim.fn.exepath("dlv" .. ext)
+        if sys_path ~= "" and not sys_path:lower():match("%.cmd$") and not sys_path:lower():match("%.bat$") then
+          return sys_path
+        end
+
+        -- 5. Fallback
+        return is_win and "dlv.exe" or "dlv"
+      end
+
+      -- Helper to detect Go project / module root (where go.mod or .git resides)
+      local function get_go_project_root(bufnr)
+        local buf_name = bufnr and vim.api.nvim_buf_get_name(bufnr) or vim.api.nvim_buf_get_name(0)
+        local start_dir = (buf_name ~= "") and vim.fs.dirname(buf_name) or vim.fn.getcwd()
+        local root = vim.fs.root(start_dir, { "go.mod", "go.work", ".git" })
+        return root or start_dir
+      end
+
+      -- Sanitize Windows path artifacts like "./C:/..." produced by treesitter test runner
+      local function sanitize_go_program_path(prog)
+        if not prog or prog == "" or prog == "${file}" or prog == "${fileDirname}" then
+          return prog
+        end
+        prog = prog:gsub("^%./([a-zA-Z]:)", "%1"):gsub("^%.\\([a-zA-Z]:)", "%1")
+        return prog
+      end
+
+      -- Setup DAP for Go (delve integration)
+      dap_go.setup({
+        dap_configurations = {
+          {
+            type = "go",
+            name = "Attach remote",
+            mode = "remote",
+            request = "attach",
+          },
+        },
+        delve = {
+          path = get_delve_path(),
+          initialize_timeout_sec = 20,
+          port = "${port}",
+          args = {},
+          build_flags = "",
+          detached = vim.fn.has("win32") == 0,
+        },
+      })
+
+      -- Directly configure DAP adapter for Go with dynamic root and Delve binary resolution
+      dap.adapters.go = function(callback, client_config)
+        local dlv_path = get_delve_path()
+        local buf_name = vim.api.nvim_buf_get_name(0)
+        local start_dir = (buf_name ~= "") and vim.fs.dirname(buf_name) or vim.fn.getcwd()
+        local root = (client_config and client_config.cwd) or vim.fs.root(start_dir, { "go.mod", "go.work", ".git" }) or start_dir
+
+        if client_config then
+          if not client_config.cwd then
+            client_config.cwd = root
+          end
+          if client_config.program then
+            client_config.program = sanitize_go_program_path(client_config.program)
+          end
+        end
+
+        callback({
+          type = "server",
+          port = "${port}",
+          executable = {
+            command = dlv_path,
+            args = { "dap", "-l", "127.0.0.1:${port}" },
+            cwd = root,
+            detached = vim.fn.has("win32") == 0,
+          },
+          options = {
+            initialize_timeout_sec = 20,
+          },
+        })
+      end
+
+      -- Open UI automatically when debug session starts
+      -- Kept open after execution terminates so variables & stack traces can be inspected
+      dap.listeners.after.event_initialized["dapui_config"] = function()
+        dapui.open()
+      end
+
+      -- Custom signs & highlights for breakpoints and execution pointer
+      vim.fn.sign_define("DapBreakpoint", { text = "🔴", texthl = "DapBreakpoint", linehl = "", numhl = "" })
+      vim.fn.sign_define("DapBreakpointCondition", { text = "🟡", texthl = "DapBreakpointCondition", linehl = "", numhl = "" })
+      vim.fn.sign_define("DapBreakpointRejected", { text = "🔘", texthl = "DapBreakpointRejected", linehl = "", numhl = "" })
+      vim.fn.sign_define("DapLogPoint", { text = "📝", texthl = "DapLogPoint", linehl = "", numhl = "" })
+      vim.fn.sign_define("DapStopped", { text = "▶️", texthl = "DapStopped", linehl = "DapStoppedLine", numhl = "" })
+      vim.api.nvim_set_hl(0, "DapStoppedLine", { default = true, link = "Visual" })
+    end,
+  },
+
 
 
   -- Inline Jupyter Notebook Cell Outputs & Execution (Molten)
@@ -730,7 +1010,13 @@ require("lazy").setup({
     "stevearc/dressing.nvim",
     event = "VeryLazy",
     opts = {
-      input = { border = "rounded" },
+      input = { 
+        border = "rounded",
+        mappings = {
+          n = { ["<Esc>"] = "Close", ["<CR>"] = "Confirm" },
+          i = { ["<Esc>"] = "Close", ["<CR>"] = "Confirm", ["<Up>"] = "HistoryPrev", ["<Down>"] = "HistoryNext" },
+        }
+      },
       select = { backend = { "telescope", "builtin" }, builtin = { border = "rounded" } },
     },
   },
@@ -762,6 +1048,12 @@ require("lazy").setup({
           "trouble",
           "checkhealth",
           "aerial",
+          "dapui_scopes",
+          "dapui_breakpoints",
+          "dapui_stacks",
+          "dapui_watches",
+          "dapui_console",
+          "dap-repl",
         },
         callback = function()
           vim.b.miniindentscope_disable = true
@@ -826,7 +1118,8 @@ require("lazy").setup({
 
 }, {
   checker = { enabled = true, notify = false, frequency = 86400 },
-  change_detection = { notify = false }
+  change_detection = { notify = false },
+  rocks = { enabled = false }
 })
 
 -- =========================================================================
@@ -857,13 +1150,31 @@ local basedpyright_analysis = {
 vim.lsp.config("basedpyright", {
   cmd = { "basedpyright-langserver", "--stdio" },
   filetypes = { "python" },
-  root_markers = { "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", "pyrightconfig.json", ".git" },
+  root_markers = { "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", "pyrightconfig.json", ".venv", ".git" },
   before_init = function(_, config)
-    local venv = vim.fs.joinpath(config.root_dir or vim.fn.getcwd(), ".venv")
+    local root = config.root_dir or _G._project_root or vim.fn.getcwd()
+    local venv = vim.fs.joinpath(root, ".venv")
     if vim.fn.isdirectory(venv) == 1 then
+      local is_win = vim.fn.has("win32") == 1
+      local py_candidates = {
+        vim.fs.joinpath(venv, "Scripts", "python.exe"),
+        vim.fs.joinpath(venv, "bin", "python"),
+        vim.fs.joinpath(venv, "Scripts", "python"),
+        vim.fs.joinpath(venv, "bin", "python.exe"),
+      }
+      local python_path = is_win and py_candidates[1] or py_candidates[2]
+      for _, cand in ipairs(py_candidates) do
+        if vim.uv.fs_stat(cand) then
+          python_path = cand
+          break
+        end
+      end
+
       config.settings = config.settings or {}
       config.settings.python = config.settings.python or {}
-      config.settings.python.pythonPath = vim.fs.joinpath(venv, "bin", "python")
+      config.settings.python.pythonPath = python_path
+      config.settings.python.venvPath = root
+      config.settings.python.venv = ".venv"
     end
   end,
   settings = {
@@ -912,6 +1223,12 @@ vim.lsp.config("jdtls", {
   },
 })
 
+-- LaTeX LSP
+vim.lsp.config("texlab", {
+  cmd = { "texlab" },
+  filetypes = { "tex", "plaintex", "bib" },
+})
+
 vim.lsp.enable("html")
 vim.lsp.enable("ts_ls")
 vim.lsp.enable("clangd")
@@ -919,6 +1236,7 @@ vim.lsp.enable("basedpyright")
 vim.lsp.enable("rust_analyzer")
 vim.lsp.enable("gopls")
 vim.lsp.enable("jdtls")
+vim.lsp.enable("texlab")
 
 vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(args)
@@ -995,7 +1313,7 @@ vim.api.nvim_create_autocmd("CursorHold", {
   pattern = "*",
   callback = function()
     local ft = vim.bo.filetype
-    if ft == "" or ft == "NvimTree" or ft == "aerial" or ft == "toggleterm" or ft == "trouble" or ft == "alpha" or ft == "lazy" or ft == "mason" then
+    if ft == "" or ft == "NvimTree" or ft == "aerial" or ft == "toggleterm" or ft == "trouble" or ft == "alpha" or ft == "lazy" or ft == "mason" or ft:find("^dap") then
       return
     end
 
@@ -1174,7 +1492,7 @@ local builtin = require('telescope.builtin')
 vim.keymap.set('n', '<C-f>', builtin.current_buffer_fuzzy_find, { noremap = true, silent = true, desc = "Fuzzy Find in File" })
 vim.keymap.set('n', '<leader>f', builtin.find_files, { noremap = true, silent = true, desc = "Find Files" })
 vim.keymap.set('n', '<leader>F', builtin.live_grep, { noremap = true, silent = true, desc = "Find Text" })
-vim.keymap.set('n', '<leader>d', function()
+vim.keymap.set('n', '<leader>fb', function()
   require('telescope').extensions.file_browser.file_browser({
     attach_mappings = function(prompt_bufnr, map)
       local actions = require("telescope.actions")
@@ -1202,6 +1520,61 @@ vim.keymap.set('n', '<leader>d', function()
     end,
   })
 end, { noremap = true, silent = true, desc = "Directory Browser (Ctrl+o to open as project)" })
+
+-- =========================================================================
+-- DEBUGGING KEYMAPS (DAP / Delve)
+-- =========================================================================
+vim.keymap.set('n', '<leader>dc', function() require('dap').continue() end, { noremap = true, silent = true, desc = "Debug: Start / Continue" })
+vim.keymap.set('n', '<leader>db', function() require('dap').toggle_breakpoint() end, { noremap = true, silent = true, desc = "Debug: Toggle Breakpoint" })
+vim.keymap.set('n', '<leader>dB', function()
+  vim.ui.input({ prompt = "Breakpoint condition: " }, function(condition)
+    if condition and condition ~= "" then
+      require('dap').set_breakpoint(condition)
+    end
+  end)
+end, { noremap = true, silent = true, desc = "Debug: Conditional Breakpoint" })
+vim.keymap.set('n', '<leader>dn', function() require('dap').step_over() end, { noremap = true, silent = true, desc = "Debug: Step Over (Next)" })
+vim.keymap.set('n', '<leader>di', function() require('dap').step_into() end, { noremap = true, silent = true, desc = "Debug: Step Into" })
+vim.keymap.set('n', '<leader>do', function() require('dap').step_out() end, { noremap = true, silent = true, desc = "Debug: Step Out" })
+vim.keymap.set('n', '<leader>dt', function()
+  local ft = vim.bo.filetype
+  if ft ~= "go" then
+    vim.notify("Not a Go buffer", vim.log.levels.WARN)
+    return
+  end
+  local bufnr = vim.api.nvim_get_current_buf()
+  local file_path = vim.api.nvim_buf_get_name(bufnr)
+  local file_dir = vim.fs.dirname(file_path)
+  local root = vim.fs.root(file_dir, { "go.mod", "go.work", ".git" }) or file_dir
+  local rel_dir = "."
+  if file_dir ~= root and file_dir:sub(1, #root) == root then
+    rel_dir = "./" .. file_dir:sub(#root + 2):gsub("\\", "/")
+  end
+  local dap_go = require("dap-go")
+  local ok = dap_go.debug_test({
+    program = rel_dir,
+    cwd = root,
+  })
+  if not ok then
+    require("dap").run({
+      type = "go",
+      name = "Debug Test (Package)",
+      request = "launch",
+      mode = "test",
+      program = rel_dir,
+      cwd = root,
+      outputMode = "remote",
+    })
+  end
+end, { noremap = true, silent = true, desc = "Debug: Go Test Under Cursor" })
+vim.keymap.set('n', '<leader>dT', function() require('dap-go').debug_last_test() end, { noremap = true, silent = true, desc = "Debug: Last Go Test" })
+vim.keymap.set('n', '<leader>dq', function()
+  require('dap').terminate()
+  require('dapui').close()
+end, { noremap = true, silent = true, desc = "Debug: Terminate & Close UI" })
+vim.keymap.set('n', '<leader>du', function() require('dapui').toggle() end, { noremap = true, silent = true, desc = "Debug: Toggle DAP UI" })
+vim.keymap.set('n', '<leader>dr', function() require('dap').repl.toggle() end, { noremap = true, silent = true, desc = "Debug: Toggle REPL" })
+vim.keymap.set({ 'n', 'v' }, '<leader>de', function() require('dapui').eval() end, { noremap = true, silent = true, desc = "Debug: Evaluate Expression" })
 
 -- =========================================================================
 -- THE NEW PROJECT / SESSION WORKFLOW
