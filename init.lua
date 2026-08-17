@@ -593,11 +593,259 @@ require("lazy").setup({
     end,
   },
 
-  -- Formatting
+  -- Formatting & Intelligent Error Handling
   {
     "stevearc/conform.nvim",
     config = function()
-      require("conform").setup({
+      local conform = require("conform")
+      local conform_ns = vim.api.nvim_create_namespace("conform_formatter_errors")
+
+      --- Parse conform / formatter error messages into structured items
+      ---@param err_str string Raw error string or conform log chunk
+      ---@param default_bufnr? integer Current buffer number if available
+      ---@return string formatter_name
+      ---@return table[] parsed_errors
+      local function parse_formatter_error(err_str, default_bufnr)
+        local errors = {}
+        local formatter_name = "formatter"
+
+        local fmt_match = err_str:match("Formatter '([^']+)'")
+        if fmt_match then
+          formatter_name = fmt_match
+        end
+
+        local default_buf_name = (default_bufnr and vim.api.nvim_buf_is_valid(default_bufnr))
+            and vim.api.nvim_buf_get_name(default_bufnr) or ""
+
+        local lines = vim.split(err_str, "\r?\n", { trimempty = true })
+
+        for _, raw_line in ipairs(lines) do
+          local line = vim.trim(raw_line)
+          -- Strip log timestamp and level prefix: e.g. "2026-08-17 08:27:03[ERROR] "
+          line = line:gsub("^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d%[[%w_]+%]%s*", "")
+          -- Strip Formatter '<name>' error: prefix
+          local stripped_fmt, rest = line:match("^Formatter '([^']+)'%s*error:%s*(.*)")
+          if stripped_fmt then
+            formatter_name = stripped_fmt
+            line = rest
+          else
+            local timeout_fmt = line:match("^Formatter '([^']+)'%s*timeout")
+            if timeout_fmt then
+              formatter_name = timeout_fmt
+              line = "Formatter timed out"
+            end
+          end
+
+          if line ~= "" then
+            local parsed = nil
+
+            -- Pattern 1: Ruff / Python "error: Failed to parse <filename>:<line>:<col>: <msg>"
+            local ruff_file, ruff_l, ruff_c, ruff_msg = line:match("error:%s*Failed to parse%s+([^:]+):(%d+):(%d+):%s*(.+)")
+            if ruff_file then
+              parsed = {
+                file = ruff_file,
+                lnum = tonumber(ruff_l),
+                col = tonumber(ruff_c),
+                msg = ruff_msg,
+              }
+            end
+
+            -- Pattern 2: Standard input with path prefix or <standard input>:
+            -- e.g. "C:\...\<standard input>:11:8: expected ')', found ':='"
+            if not parsed then
+              local stdin_prefix, l, c, msg = line:match("^(.-)[<\\]?standard input>?:(%d+):(%d+):%s*(.+)")
+              if stdin_prefix and l and c and msg then
+                parsed = {
+                  file = default_buf_name ~= "" and default_buf_name or (stdin_prefix ~= "" and stdin_prefix or "<standard input>"),
+                  lnum = tonumber(l),
+                  col = tonumber(c),
+                  msg = msg,
+                }
+              end
+            end
+
+            -- Pattern 3: Windows drive letter paths like "C:\path\to\file.go:11:8: msg" or "C:/path/file.py:11:8: msg"
+            if not parsed then
+              local drive, rest_f, l, c, msg = line:match("^([a-zA-Z]):[\\/](.-):(%d+):(%d+):%s*(.+)")
+              if drive and rest_f and l and c and msg then
+                parsed = {
+                  file = drive .. ":\\" .. rest_f,
+                  lnum = tonumber(l),
+                  col = tonumber(c),
+                  msg = msg,
+                }
+              end
+            end
+
+            -- Pattern 4: Generic "<file>:<line>:<col>: <msg>"
+            if not parsed then
+              local f, l, c, msg = line:match("^([^:]+):(%d+):(%d+):%s*(.+)")
+              if f and l and c and msg and not f:match("^[a-zA-Z]$") then
+                parsed = {
+                  file = f,
+                  lnum = tonumber(l),
+                  col = tonumber(c),
+                  msg = msg,
+                }
+              end
+            end
+
+            -- Pattern 5: Prettier SyntaxError: "[error] <file>: SyntaxError: <msg> (<line>:<col>)"
+            if not parsed then
+              local pf, pmsg, pl, pc = line:match("%[?error%]?%s*([^:]+):%s*(.-)%s*%((%d+):(%d+)%)")
+              if pf and pl and pc then
+                parsed = {
+                  file = pf,
+                  lnum = tonumber(pl),
+                  col = tonumber(pc),
+                  msg = pmsg,
+                }
+              end
+            end
+
+            -- Pattern 6: Python traceback "File "<stdin>", line 10" or "File "foo.py", line 10"
+            if not parsed then
+              local py_f, py_l = line:match('File "([^"]+)", line (%d+)')
+              if py_f and py_l then
+                parsed = {
+                  file = py_f,
+                  lnum = tonumber(py_l),
+                  col = 1,
+                  msg = line,
+                }
+              end
+            end
+
+            -- Pattern 7: Line without column "<file>:<line>: <msg>"
+            if not parsed then
+              local f, l, msg = line:match("^([^:]+):(%d+):%s*(.+)")
+              if f and l and msg and not f:match("^[a-zA-Z]$") then
+                parsed = {
+                  file = f,
+                  lnum = tonumber(l),
+                  col = 1,
+                  msg = msg,
+                }
+              end
+            end
+
+            -- Fallback if line has error content
+            local l_low = line:lower()
+            if not parsed and (l_low:find("error") or l_low:find("fail") or l_low:find("timeout") or l_low:find("timed out") or l_low:find("syntax") or l_low:find("warn")) then
+              parsed = {
+                file = default_buf_name ~= "" and default_buf_name or "Conform",
+                lnum = 1,
+                col = 1,
+                msg = line,
+              }
+            end
+
+            if parsed then
+              if parsed.file:find("<standard input>") or parsed.file:find("stdin") or parsed.file == "" then
+                parsed.file = default_buf_name ~= "" and default_buf_name or parsed.file
+              elseif default_buf_name ~= "" and (parsed.file == default_buf_name or default_buf_name:find(parsed.file, 1, true)) then
+                parsed.file = default_buf_name
+              end
+              parsed.formatter = formatter_name
+              table.insert(errors, parsed)
+            end
+          end
+        end
+
+        return formatter_name, errors
+      end
+
+      --- Clear buffer diagnostics from conform
+      local function clear_conform_errors(bufnr)
+        if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+          vim.diagnostic.reset(conform_ns, bufnr)
+        end
+      end
+
+      --- Dispatch conform errors to diagnostics, quickfix list, and notification
+      local function handle_conform_errors(err_str, bufnr)
+        if not err_str or err_str == "" then return end
+        if err_str == "No formatters available for buffer" or err_str:find("No formatters available") or err_str:find("buffer was deleted") then
+          return
+        end
+        local formatter, parsed_errors = parse_formatter_error(err_str, bufnr)
+
+        if #parsed_errors == 0 then
+          vim.notify(err_str, vim.log.levels.ERROR, { title = "Conform: " .. formatter })
+          return
+        end
+
+        local qf_items = {}
+        local diagnostics = {}
+        local notif_lines = {}
+
+        for _, item in ipairs(parsed_errors) do
+          if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+            local total_lines = vim.api.nvim_buf_line_count(bufnr)
+            local lnum = math.min(math.max(1, item.lnum or 1), total_lines) - 1
+            local col = math.max(0, (item.col or 1) - 1)
+            table.insert(diagnostics, {
+              bufnr = bufnr,
+              lnum = lnum,
+              col = col,
+              severity = vim.diagnostic.severity.ERROR,
+              source = "Conform (" .. formatter .. ")",
+              message = item.msg,
+            })
+          end
+
+          table.insert(qf_items, {
+            bufnr = bufnr or 0,
+            filename = (item.file ~= "" and item.file ~= "<standard input>") and item.file or (bufnr and vim.api.nvim_buf_get_name(bufnr) or "Conform"),
+            lnum = item.lnum or 1,
+            col = item.col or 1,
+            text = string.format("[%s] %s", formatter, item.msg),
+            type = "E",
+          })
+
+          table.insert(notif_lines, string.format("  • Line %d:%d: %s", item.lnum or 1, item.col or 1, item.msg))
+        end
+
+        -- Publish diagnostics on buffer
+        if bufnr and vim.api.nvim_buf_is_valid(bufnr) and #diagnostics > 0 then
+          vim.diagnostic.set(conform_ns, bufnr, diagnostics)
+        end
+
+        -- Update Quickfix list
+        if #qf_items > 0 then
+          vim.fn.setqflist(qf_items, "r")
+          vim.fn.setqflist({}, "a", { title = "Conform Formatter Errors" })
+        end
+
+        -- Show notification with real error details
+        local notif_body = string.format("Formatter '%s' failed (%d error%s):\n%s", formatter, #parsed_errors, #parsed_errors > 1 and "s" or "", table.concat(notif_lines, "\n"))
+        vim.notify(notif_body, vim.log.levels.ERROR, { title = "Conform: " .. formatter })
+      end
+
+      --- Format buffer with error handling
+      local function format_buffer(bufnr, opts)
+        bufnr = (bufnr and bufnr ~= 0) and bufnr or vim.api.nvim_get_current_buf()
+        opts = opts or {}
+        local timeout = vim.fn.has("win32") == 1 and 3000 or 1000
+        conform.format(vim.tbl_extend("force", {
+          bufnr = bufnr,
+          async = false,
+          lsp_format = "fallback",
+          timeout_ms = timeout,
+          quiet = true,
+        }, opts), function(err, did_edit)
+          if err then
+            handle_conform_errors(err, bufnr)
+          else
+            clear_conform_errors(bufnr)
+            if did_edit then
+              vim.notify("Formatted buffer successfully", vim.log.levels.INFO, { title = "Conform" })
+            end
+          end
+        end)
+      end
+
+      conform.setup({
         formatters_by_ft = {
           javascript = { "prettier" },
           typescript = { "prettier" },
@@ -615,11 +863,132 @@ require("lazy").setup({
           go = { "goimports", "gofmt" },
           java = { "google-java-format" },
         },
-        format_on_save = { timeout_ms = vim.fn.has("win32") == 1 and 3000 or 1000, lsp_format = "fallback" },
+        notify_on_error = false,
+        format_on_save = function(bufnr)
+          local timeout = vim.fn.has("win32") == 1 and 3000 or 1000
+          return {
+            timeout_ms = timeout,
+            lsp_format = "fallback",
+            quiet = true,
+          }, function(err)
+            if err then
+              handle_conform_errors(err, bufnr)
+            else
+              clear_conform_errors(bufnr)
+            end
+          end
+        end,
         formatters = {
           prettier = { prepend_args = { "--use-tabs", "--tab-width", "4", "--no-semi" } },
         },
       })
+
+      -- Interactive navigation inside :ConformInfo floating window
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "conform-info",
+        desc = "ConformInfo interactive error navigation & quickfix export",
+        callback = function(args)
+          local buf = args.buf
+          -- Press <CR> on any error line in ConformInfo to jump to the source file & line
+          vim.keymap.set("n", "<CR>", function()
+            local line = vim.api.nvim_get_current_line()
+            local _, parsed = parse_formatter_error(line, nil)
+            if parsed and #parsed > 0 then
+              local item = parsed[1]
+              if item.file and item.file ~= "" and item.file ~= "Conform" and item.file ~= "<standard input>" then
+                vim.cmd("close")
+                vim.cmd("edit " .. vim.fn.fnameescape(item.file))
+                pcall(vim.api.nvim_win_set_cursor, 0, { math.max(1, item.lnum or 1), math.max(0, (item.col or 1) - 1) })
+              else
+                vim.notify("Cannot jump: file path is stdin or not specified", vim.log.levels.WARN, { title = "ConformInfo" })
+              end
+            else
+              vim.notify("No error line found under cursor", vim.log.levels.INFO, { title = "ConformInfo" })
+            end
+          end, { buffer = buf, silent = true, desc = "Jump to error under cursor" })
+
+          -- Press 'E' in ConformInfo to load all errors into Quickfix
+          vim.keymap.set("n", "E", function()
+            local buf_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+            local content = table.concat(buf_lines, "\n")
+            local _, parsed = parse_formatter_error(content, nil)
+            if #parsed > 0 then
+              local qf_list = {}
+              for _, it in ipairs(parsed) do
+                table.insert(qf_list, {
+                  filename = (it.file ~= "" and it.file ~= "<standard input>") and it.file or "Conform",
+                  lnum = it.lnum or 1,
+                  col = it.col or 1,
+                  text = string.format("[%s] %s", it.formatter or "formatter", it.msg),
+                  type = "E",
+                })
+              end
+              vim.fn.setqflist(qf_list, "r")
+              vim.fn.setqflist({}, "a", { title = "ConformInfo Errors (" .. #qf_list .. ")" })
+              vim.cmd("copen")
+              vim.notify(string.format("Exported %d errors to Quickfix", #qf_list), vim.log.levels.INFO, { title = "ConformInfo" })
+            else
+              vim.notify("No error lines found in ConformInfo", vim.log.levels.INFO, { title = "ConformInfo" })
+            end
+          end, { buffer = buf, silent = true, desc = "Export all errors to Quickfix" })
+        end,
+      })
+
+      -- User Command: Format current buffer or visual selection
+      vim.api.nvim_create_user_command("Format", function(args)
+        local range = nil
+        if args.count ~= -1 then
+          local end_line = vim.api.nvim_buf_get_lines(0, args.line2 - 1, args.line2, true)[1]
+          range = {
+            start = { args.line1, 0 },
+            ["end"] = { args.line2, end_line and end_line:len() or 0 },
+          }
+        end
+        format_buffer(0, { range = range })
+      end, { range = true, desc = "Format buffer or selection with Conform error handling" })
+
+      -- User Command: Load recent conform.log errors into Quickfix list
+      vim.api.nvim_create_user_command("ConformErrors", function()
+        local log = require("conform.log")
+        local logfile = log.get_logfile()
+        if vim.fn.filereadable(logfile) ~= 1 then
+          vim.notify("No conform.log found at: " .. logfile, vim.log.levels.INFO, { title = "Conform" })
+          return
+        end
+        local f = io.open(logfile, "r")
+        if not f then
+          vim.notify("Failed to open conform.log", vim.log.levels.ERROR, { title = "Conform" })
+          return
+        end
+        local content = f:read("*a")
+        f:close()
+
+        local curr_buf = vim.api.nvim_get_current_buf()
+        local _, parsed = parse_formatter_error(content, curr_buf)
+        if #parsed == 0 then
+          vim.notify("No errors found in conform.log", vim.log.levels.INFO, { title = "Conform" })
+          return
+        end
+
+        local qf_list = {}
+        for _, it in ipairs(parsed) do
+          table.insert(qf_list, {
+            filename = (it.file ~= "" and it.file ~= "<standard input>") and it.file or (curr_buf and vim.api.nvim_buf_get_name(curr_buf) or "Conform"),
+            lnum = it.lnum or 1,
+            col = it.col or 1,
+            text = string.format("[%s] %s", it.formatter or "formatter", it.msg),
+            type = "E",
+          })
+        end
+
+        vim.fn.setqflist(qf_list, "r")
+        vim.fn.setqflist({}, "a", { title = "Conform Log Errors (" .. #qf_list .. ")" })
+        vim.cmd("copen")
+      end, { desc = "Load errors from conform.log into Quickfix list" })
+
+      -- Keymaps for formatting and error inspection
+      vim.keymap.set({ "n", "v" }, "<leader>cf", function() vim.cmd("Format") end, { noremap = true, silent = true, desc = "Conform: Format Buffer" })
+      vim.keymap.set("n", "<leader>ce", "<cmd>ConformErrors<CR>", { noremap = true, silent = true, desc = "Conform: View Formatter Errors (Quickfix)" })
     end,
   },
 
@@ -677,7 +1046,7 @@ require("lazy").setup({
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        ensure_installed = { "prettier", "clang-format", "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "gopls", "goimports", "delve", "jdtls", "google-java-format", "texlab" },
+        ensure_installed = { "prettier", "clang-format", "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "goimports", "delve", "jdtls", "google-java-format", "texlab" },
         auto_update = false,
         run_on_start = true,
       })
@@ -1131,8 +1500,8 @@ local has_cmp, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
 if has_cmp then capabilities = cmp_nvim_lsp.default_capabilities(capabilities) end
 
 vim.lsp.config("*", { capabilities = capabilities })
-vim.lsp.config("html", {})   
-vim.lsp.config("ts_ls", {})  
+vim.lsp.config("html", { cmd = { "vscode-html-language-server", "--stdio" }, filetypes = { "html", "templ" } })   
+vim.lsp.config("ts_ls", { cmd = { "typescript-language-server", "--stdio" }, filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" } })  
 
 vim.lsp.config("clangd", { cmd = { "clangd" }, filetypes = { "c", "cpp", "objc", "objcpp" } })
 local basedpyright_analysis = {
@@ -1188,9 +1557,24 @@ vim.lsp.config("basedpyright", {
 })
 vim.lsp.config("rust_analyzer", { cmd = { "rust-analyzer" }, filetypes = { "rust" }, settings = { ["rust-analyzer"] = { checkOnSave = true, check = { command = "check" }, cargo = { allFeatures = true } } } })
 
--- Go LSP
+-- Go LSP (Resolved to native GOPATH binary to avoid Windows Device Guard blocking Mason AppData package)
+local function get_gopls_cmd()
+  local candidates = {
+    vim.fn.expand("~/go/bin/gopls.exe"),
+    vim.fn.expand("~/go/bin/gopls"),
+    "C:\\Program Files\\Go\\bin\\gopls.exe",
+    "gopls",
+  }
+  for _, cand in ipairs(candidates) do
+    if vim.fn.filereadable(cand) == 1 or cand == "gopls" then
+      return { cand }
+    end
+  end
+  return { "gopls" }
+end
+
 vim.lsp.config("gopls", {
-  cmd = { "gopls" },
+  cmd = get_gopls_cmd(),
   filetypes = { "go", "gomod", "gowork", "gotmpl" },
   root_markers = { "go.mod", "go.work", ".git" },
   settings = {
@@ -1622,6 +2006,7 @@ vim.keymap.set('n', '<leader>h', function()
     vim.cmd("cd " .. vim.fn.fnameescape(_G._project_root))
   end
   vim.cmd("AutoSession save") -- Save current session
+  for _, client in ipairs(vim.lsp.get_clients()) do client:stop() end -- Stop LSP servers on return to dashboard (comment out to keep servers running)
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
       vim.cmd("bdelete! " .. bufnr)
@@ -1716,7 +2101,6 @@ vim.keymap.set('n', '<S-Tab>', '<cmd>BufferLineCyclePrev<CR>', { noremap = true,
 
 -- Window Split Navigation
 vim.keymap.set('n', '<C-h>', '<C-w>h', { noremap = true, silent = true })
-vim.keymap.set('n', '<C-j>', '<C-w>j', { noremap = true, silent = true })
 vim.keymap.set('n', '<C-k>', '<C-w>k', { noremap = true, silent = true })
 vim.keymap.set('n', '<C-l>', '<C-w>l', { noremap = true, silent = true })
 
@@ -1751,6 +2135,8 @@ vim.keymap.set('i', '<C-z>', '<C-o>u', { noremap = true, silent = true })
 vim.keymap.set('n', '<C-y>', '<C-r>', { noremap = true, silent = true })
 vim.keymap.set('i', '<C-y>', '<C-o><C-r>', { noremap = true, silent = true })
 vim.keymap.set('n', '<Esc>', ':nohlsearch<CR>', { noremap = true, silent = true })
+vim.keymap.set({ 'i', 'v', 's', 'c' }, '<C-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set('n', '<C-j>', ':nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
 
 -- Open in OS Viewer
 vim.keymap.set('n', '<leader>o', function()
