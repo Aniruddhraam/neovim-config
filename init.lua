@@ -1,9 +1,17 @@
+-- Enable Neovim Lua bytecode caching for 30-50% faster startup
+if vim.loader then
+  vim.loader.enable()
+end
+
 -- Ensure ~/.local/bin and ~/go/bin are in PATH across all operating systems (Linux, macOS, Windows)
 local is_win = vim.fn.has("win32") == 1
 local path_sep = is_win and ";" or ":"
 local extra_paths = {
   vim.fn.expand("~/.local/bin"),
   vim.fn.expand("~/go/bin"),
+  vim.fn.expand("~/.cargo/bin"),
+  vim.fn.expand("~/AppData/Roaming/npm"),
+  vim.fn.expand("~/scoop/shims"),
 }
 for _, p in ipairs(extra_paths) do
   if vim.fn.isdirectory(p) == 1 and not string.find(vim.env.PATH, p, 1, true) then
@@ -138,7 +146,8 @@ require("lazy").setup({
                 _G._project_root = dir
                 vim.cmd("cd " .. vim.fn.fnameescape(dir))
                 vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
-                vim.cmd("enew") -- Open empty buffer to clear the Alpha background
+                local scratch_buf = vim.api.nvim_create_buf(false, true)
+                vim.api.nvim_set_current_buf(scratch_buf)
               end
             end
             map("i", "<CR>", open_tree)
@@ -170,9 +179,56 @@ require("lazy").setup({
 
       alpha.setup(dashboard.opts)
 
+      -- Error handling for dashboard: silence accidental keystrokes that would cause "E21: Cannot make changes, 'modifiable' is off"
+      local function setup_alpha_key_handler(bufnr)
+        bufnr = (bufnr and bufnr ~= 0) and bufnr or vim.api.nvim_get_current_buf()
+        local preserve_keys = {
+          ["j"] = true, ["k"] = true, ["h"] = true, ["l"] = true,
+          ["<Up>"] = true, ["<Down>"] = true, ["<Left>"] = true, ["<Right>"] = true,
+          ["<CR>"] = true, ["<Tab>"] = true, ["<S-Tab>"] = true,
+          ["<Esc>"] = true, [":"] = true, [" "] = true,
+        }
+
+        -- Preserve button shortcuts configured in dashboard
+        for _, button in ipairs(dashboard.section.buttons.val or {}) do
+          if button.opts and button.opts.shortcut then
+            local sc = button.opts.shortcut:match("%s*(%S+)%s*")
+            if sc then preserve_keys[sc] = true end
+          end
+        end
+
+        if vim.g.mapleader then
+          preserve_keys[vim.g.mapleader] = true
+        end
+
+        local keys_to_nop = {
+          "i", "I", "a", "A", "o", "O", "s", "S", "c", "C", "r", "R", "u", "U",
+          "x", "X", "d", "D", "p", "P", "y", "Y", "~", "J", "g", "G", "v", "V",
+          "<C-v>", "<C-a>", "<C-x>", "<C-r>", "<BS>", "<Del>", "<Insert>",
+          "<", ">", "=", ".",
+        }
+        for b = 32, 126 do
+          table.insert(keys_to_nop, string.char(b))
+        end
+
+        for _, k in ipairs(keys_to_nop) do
+          if not preserve_keys[k] then
+            pcall(vim.keymap.set, { "n", "v" }, k, "<Nop>", { buffer = bufnr, silent = true, nowait = true })
+          end
+        end
+      end
+
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "alpha",
+        callback = function(args)
+          setup_alpha_key_handler(args.buf)
+        end,
+      })
+
       vim.api.nvim_create_autocmd("User", {
           pattern = "AlphaReady",
           callback = function()
+              setup_alpha_key_handler(vim.api.nvim_get_current_buf())
               vim.b.miniindentscope_disable = true
               for i = 1, #logo do dashboard.section.header.val[i] = "" end
               local row, col, pause_ticks = 1, 1, 0
@@ -232,6 +288,55 @@ require("lazy").setup({
   {
     "rmagatti/auto-session",
     config = function()
+      local function clean_unnamed_buffers()
+        -- 1. Wipe unlisted/unnamed empty scratch buffers
+        for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_is_valid(bufnr) then
+            local name = vim.api.nvim_buf_get_name(bufnr)
+            local bt = vim.bo[bufnr].buftype
+            local ft = vim.bo[bufnr].filetype
+            local modified = vim.bo[bufnr].modified
+            local line_count = vim.api.nvim_buf_line_count(bufnr)
+            local is_empty = (line_count <= 1 and (vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1] or "") == "")
+            if (name == "" or ft == "alpha") and is_empty and not modified and (bt == "" or bt == "nofile") then
+              pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+            end
+          end
+        end
+
+        -- 2. Close any orphaned blank window splits
+        local file_wins = {}
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local cfg = vim.api.nvim_win_get_config(win)
+            if cfg.relative == "" then
+              local buf = vim.api.nvim_win_get_buf(win)
+              local ft = vim.bo[buf].filetype
+              local name = vim.api.nvim_buf_get_name(buf)
+              if ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" and ft ~= "alpha" and name ~= "" then
+                table.insert(file_wins, win)
+              end
+            end
+          end
+        end
+
+        if #file_wins > 0 then
+          for _, win in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_is_valid(win) then
+              local cfg = vim.api.nvim_win_get_config(win)
+              if cfg.relative == "" then
+                local buf = vim.api.nvim_win_get_buf(win)
+                local ft = vim.bo[buf].filetype
+                local name = vim.api.nvim_buf_get_name(buf)
+                if ft == "" and name == "" and not vim.bo[buf].modified then
+                  pcall(vim.api.nvim_win_close, win, true)
+                end
+              end
+            end
+          end
+        end
+      end
+
       require("auto-session").setup({
         log_level = "error",
         auto_session_suppress_dirs = { "~/", "~/Downloads", "/" },
@@ -242,6 +347,7 @@ require("lazy").setup({
           "NvimTreeClose", 
           "AerialClose", 
           function() pcall(vim.cmd, "Trouble close") end,
+          clean_unnamed_buffers,
           -- Reset cwd to the explicitly tracked project root before saving.
           function()
             if _G._project_root and vim.fn.isdirectory(_G._project_root) == 1 then
@@ -249,11 +355,16 @@ require("lazy").setup({
             end
           end,
         },
+        pre_restore_cmds = {
+          clean_unnamed_buffers,
+        },
         post_restore_cmds = {
+          clean_unnamed_buffers,
           -- Open NvimTree rooted at the (now-correct) project cwd
           function()
             vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(vim.fn.getcwd()))
           end,
+          clean_unnamed_buffers,
         },
       })
     end,
@@ -362,44 +473,6 @@ require("lazy").setup({
           ["o"] = "actions.jump",             -- 'o' to jump to symbol
         },
       })
-
-      -- Handle tab/buffer switches: re-open or close aerial as needed
-      vim.api.nvim_create_autocmd("BufEnter", {
-        callback = function(args)
-          local ft = vim.bo[args.buf].filetype
-          if ft == "" or ft == "aerial" or ft == "NvimTree" or ft == "alpha" or ft == "toggleterm" or ft == "trouble" then
-            return
-          end
-          -- If user explicitly closed aerial, keep it closed globally
-          if _G._aerial_user_closed then return end
-          vim.defer_fn(function()
-            if not vim.api.nvim_buf_is_valid(args.buf) then return end
-            if vim.api.nvim_get_current_buf() ~= args.buf then return end
-            local curr_ft = vim.bo[args.buf].filetype
-            if curr_ft == "" or curr_ft == "aerial" or curr_ft == "NvimTree" or curr_ft == "alpha" or curr_ft == "toggleterm" or curr_ft == "trouble" then
-              return
-            end
-            if _G._aerial_user_closed then return end
-            local ok, aerial = pcall(require, "aerial")
-            if not ok then return end
-            local ok_count, count = pcall(aerial.num_symbols, args.buf)
-            if ok_count and count and count > 0 then
-              if not aerial.is_open({ bufnr = args.buf }) then
-                pcall(aerial.open, { bufnr = args.buf, focus = false })
-              end
-            else
-              local backends = require("aerial.backends").get_status(args.buf)
-              local has_supported = false
-              for _, b in ipairs(backends or {}) do
-                if b.supported then has_supported = true; break end
-              end
-              if not has_supported and aerial.is_open() then
-                pcall(aerial.close)
-              end
-            end
-          end, 300)
-        end,
-      })
     end
   },
 
@@ -504,18 +577,147 @@ require("lazy").setup({
     "nvim-tree/nvim-tree.lua",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
+      local is_win = vim.fn.has("win32") == 1
+
+      --- Asynchronously delete a single file or directory in the background
+      ---@param target_path string Path to delete
+      ---@param on_done? fun(success: boolean) Callback on completion
+      local function async_delete_single(target_path, on_done)
+        if not target_path or target_path == "" then return end
+        local is_dir = vim.fn.isdirectory(target_path) == 1
+        local cmd = {}
+
+        if is_win then
+          local win_path = target_path:gsub("/", "\\")
+          if is_dir then
+            cmd = { "cmd.exe", "/c", "rmdir", "/s", "/q", win_path }
+          else
+            cmd = { "cmd.exe", "/c", "del", "/f", "/q", win_path }
+          end
+        else
+          cmd = { "rm", "-rf", target_path }
+        end
+
+        local name = vim.fn.fnamemodify(target_path, ":t")
+        if name == "" then name = target_path end
+
+        vim.notify(string.format("Deleting '%s' in background...", name), vim.log.levels.INFO, { title = "Async Delete" })
+
+        vim.system(cmd, {}, function(obj)
+          vim.schedule(function()
+            if obj.code == 0 then
+              vim.notify(string.format("Successfully deleted '%s'", name), vim.log.levels.INFO, { title = "Async Delete" })
+              -- Clean up any open buffers matching the deleted path
+              for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+                if vim.api.nvim_buf_is_valid(buf) then
+                  local buf_name = vim.api.nvim_buf_get_name(buf)
+                  if buf_name ~= "" and (buf_name == target_path or (is_win and buf_name:lower() == target_path:lower())) then
+                    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+                  end
+                end
+              end
+            else
+              local err = (obj.stderr and obj.stderr ~= "") and obj.stderr or ("Exit code " .. tostring(obj.code))
+              vim.notify(string.format("Failed to delete '%s': %s", name, vim.trim(err)), vim.log.levels.ERROR, { title = "Async Delete" })
+            end
+            if on_done then on_done(obj.code == 0) end
+          end)
+        end)
+      end
+
+      --- Asynchronously delete multiple paths in parallel
+      ---@param paths string[] List of paths to delete
+      ---@param on_done? fun(all_success: boolean) Callback on completion
+      local function async_delete_multiple(paths, on_done)
+        if not paths or #paths == 0 then return end
+        local total = #paths
+        local completed = 0
+        local has_error = false
+
+        for _, p in ipairs(paths) do
+          async_delete_single(p, function(success)
+            completed = completed + 1
+            if not success then has_error = true end
+            if completed == total and on_done then
+              on_done(not has_error)
+            end
+          end)
+        end
+      end
+
+      -- Expose globally for use anywhere in Neovim
+      _G.Async_Delete_Path = async_delete_single
+      _G.Async_Delete_Paths = async_delete_multiple
+
+      --- Custom delete action for NvimTree (replaces blocking synchronous deletion on 'd' and 'D')
+      local function nvim_tree_async_remove(node)
+        local api = require("nvim-tree.api")
+        local marks = api.marks.list()
+        local targets = {}
+
+        if #marks > 0 then
+          for _, m in ipairs(marks) do
+            if m.absolute_path then
+              table.insert(targets, m.absolute_path)
+            end
+          end
+        else
+          local target_node = node or api.tree.get_node_under_cursor()
+          if target_node and target_node.absolute_path then
+            table.insert(targets, target_node.absolute_path)
+          end
+        end
+
+        if #targets == 0 then
+          vim.notify("No file or folder selected for deletion", vim.log.levels.WARN, { title = "NvimTree" })
+          return
+        end
+
+        local prompt_msg
+        if #targets == 1 then
+          local name = vim.fn.fnamemodify(targets[1], ":t")
+          local is_dir = vim.fn.isdirectory(targets[1]) == 1
+          prompt_msg = string.format("Delete %s '%s' in background? [y/N]: ", is_dir and "folder" or "file", name)
+        else
+          prompt_msg = string.format("Delete %d marked items in background? [y/N]: ", #targets)
+        end
+
+        vim.ui.input({ prompt = prompt_msg }, function(choice)
+          if choice and (choice:lower() == "y" or choice:lower() == "yes") then
+            async_delete_multiple(targets, function()
+              if #marks > 0 then
+                api.marks.clear()
+              end
+              api.tree.reload()
+            end)
+          end
+        end)
+      end
+
       require("nvim-tree").setup({
         sync_root_with_cwd = true, -- Follow cwd changes so tree matches project root
         on_attach = function(bufnr)
-          local api = require('nvim-tree.api')
+          local api = require("nvim-tree.api")
           api.config.mappings.default_on_attach(bufnr)
-          vim.keymap.set('n', 'q', '<cmd>wincmd p<CR>', { buffer = bufnr, noremap = true, silent = true, desc = "Return to code" })
+          vim.keymap.set("n", "q", "<cmd>wincmd p<CR>", { buffer = bufnr, noremap = true, silent = true, desc = "Return to code" })
+
+          -- Override blocking deletion keys ('d' and 'D') with async background execution
+          vim.keymap.set("n", "d", nvim_tree_async_remove, { buffer = bufnr, noremap = true, silent = true, desc = "Async Delete (Background)" })
+          vim.keymap.set("n", "D", nvim_tree_async_remove, { buffer = bufnr, noremap = true, silent = true, desc = "Async Delete (Background)" })
         end,
         view = { width = 35, side = "left" },
         filesystem_watchers = {
           enable = true,
-          debounce_delay = 50,
-          ignore_dirs = {},
+          debounce_delay = 150,
+          ignore_dirs = {
+            "node_modules",
+            "target",
+            "%.git",
+            "%.venv",
+            "build",
+            "dist",
+            "__pycache__",
+          },
           max_events = 0, -- Set to 0 (unlimited) to prevent disabling watcher during directory deletions on Windows; matches Linux default
         },
         renderer = {
@@ -847,21 +1049,22 @@ require("lazy").setup({
 
       conform.setup({
         formatters_by_ft = {
-          javascript = { "prettier" },
-          typescript = { "prettier" },
-          javascriptreact = { "prettier" },
-          typescriptreact = { "prettier" },
-          css = { "prettier" },
-          html = { "prettier" },
-          json = { "prettier" },
-          yaml = { "prettier" },
-          markdown = { "prettier" },
+          javascript = { "oxfmt" },
+          typescript = { "oxfmt" },
+          javascriptreact = { "oxfmt" },
+          typescriptreact = { "oxfmt" },
+          css = { "oxfmt" },
+          html = { "oxfmt" },
+          json = { "oxfmt" },
+          yaml = { "oxfmt" },
+          markdown = { "oxfmt" },
           python = { "ruff_format" },
           c = { "clang-format" },
           cpp = { "clang-format" },
           rust = { "rustfmt" },
-          go = { "goimports", "gofmt" },
+          go = { "gofmt" },
           java = { "google-java-format" },
+          toml = { "taplo" },
         },
         notify_on_error = false,
         format_on_save = function(bufnr)
@@ -879,7 +1082,14 @@ require("lazy").setup({
           end
         end,
         formatters = {
-          prettier = { prepend_args = { "--use-tabs", "--tab-width", "4", "--no-semi" } },
+          oxfmt = {
+            command = "oxfmt",
+            args = { "--stdin-filepath", "$FILENAME" },
+            stdin = true,
+          },
+          ruff_format = { prepend_args = { "--config", 'format.indent-style="tab"', "--config", "indent-width=4" } },
+          ["clang-format"] = { prepend_args = { "-style={UseTab: Always, TabWidth: 4, IndentWidth: 4}" } },
+          rustfmt = { prepend_args = { "--config", "hard_tabs=true,tab_spaces=4" } },
         },
       })
 
@@ -992,66 +1202,53 @@ require("lazy").setup({
     end,
   },
 
-  -- Autocompletion Engine
+  -- Next-Gen High Performance Autocompletion Engine (Rust SIMD-accelerated fuzzy matching)
   {
-    "hrsh7th/nvim-cmp",
+    "saghen/blink.cmp",
+    version = "*",
     dependencies = {
-      "hrsh7th/cmp-nvim-lsp",
-      "hrsh7th/cmp-buffer",
-      "hrsh7th/cmp-path",
-      "L3MON4D3/LuaSnip",
-      "saadparwaiz1/cmp_luasnip",
+      "rafamadriz/friendly-snippets",
     },
-    config = function()
-      local cmp = require("cmp")
-      local luasnip = require("luasnip")
-
-      cmp.setup({
-        window = {
-          completion = cmp.config.window.bordered({ border = "rounded" }),
-          documentation = cmp.config.window.bordered({ border = "rounded" }),
+    opts = {
+      keymap = {
+        preset = "default",
+        ["<C-space>"] = { "show", "show_documentation", "hide_documentation" },
+        ["<C-e>"] = { "hide", "fallback" },
+        ["<CR>"] = { "accept", "fallback" },
+        ["<Tab>"] = { "select_next", "snippet_forward", "fallback" },
+        ["<S-Tab>"] = { "select_prev", "snippet_backward", "fallback" },
+        ["<C-b>"] = { "scroll_documentation_up", "fallback" },
+        ["<C-f>"] = { "scroll_documentation_down", "fallback" },
+      },
+      appearance = {
+        use_nvim_cmp_as_default = true,
+        nerd_font_variant = "mono",
+      },
+      sources = {
+        default = { "lsp", "path", "snippets", "buffer" },
+      },
+      completion = {
+        menu = {
+          border = "rounded",
         },
-        snippet = { expand = function(args) luasnip.lsp_expand(args.body) end },
-        mapping = cmp.mapping.preset.insert({
-          ["<C-b>"] = cmp.mapping.scroll_docs(-4),
-          ["<C-f>"] = cmp.mapping.scroll_docs(4),
-          ["<C-Space>"] = cmp.mapping.complete(),
-          ["<C-e>"] = cmp.mapping.abort(),
-          ["<CR>"] = cmp.mapping.confirm({ select = false }),
-          ["<Tab>"] = cmp.mapping(function(fallback)
-            if cmp.visible() then cmp.select_next_item()
-            elseif luasnip.expand_or_jumpable() then luasnip.expand_or_jump()
-            else fallback() end
-          end, { "i", "s" }),
-          ["<S-Tab>"] = cmp.mapping(function(fallback)
-            if cmp.visible() then cmp.select_prev_item()
-            elseif luasnip.jumpable(-1) then luasnip.jump(-1)
-            else fallback() end
-          end, { "i", "s" }),
-        }),
-        sources = cmp.config.sources({
-          { name = "nvim_lsp" }, { name = "luasnip" },
-        }, {
-          { name = "buffer" }, { name = "path" },
-        }),
-      })
-    end,
+        documentation = {
+          auto_show = true,
+          auto_show_delay_ms = 200,
+          window = {
+            border = "rounded",
+          },
+        },
+      },
+      signature = {
+        enabled = true,
+        window = {
+          border = "rounded",
+        },
+      },
+    },
+    opts_extend = { "sources.default" },
   },
 
-  -- Mason and related tools for LSP management
-  { "williamboman/mason.nvim", config = function() require("mason").setup() end },
-
-  {
-    "WhoIsSethDaniel/mason-tool-installer.nvim",
-    dependencies = { "williamboman/mason.nvim" },
-    config = function()
-      require("mason-tool-installer").setup({
-        ensure_installed = { "prettier", "clang-format", "html-lsp", "clangd", "ruff", "typescript-language-server", "basedpyright", "rust-analyzer", "goimports", "delve", "jdtls", "google-java-format", "texlab" },
-        auto_update = false,
-        run_on_start = true,
-      })
-    end,
-  },
 
   -- Diagnostics & Errors Panel
   {
@@ -1146,18 +1343,12 @@ require("lazy").setup({
         },
       })
 
-      -- Helper to find the actual delve binary executable (handles Windows .cmd vs .exe, Mason, GOPATH, and Unix)
+      -- Helper to find the actual delve binary executable (handles Windows vs Unix, GOPATH, ~/go/bin, and system PATH)
       local function get_delve_path()
         local is_win = vim.fn.has("win32") == 1
         local ext = is_win and ".exe" or ""
 
-        -- 1. Check Mason packages directory (direct binary, bypassing Windows .CMD wrappers)
-        local mason_pkg = vim.fs.joinpath(vim.fn.stdpath("data"), "mason", "packages", "delve", "dlv" .. ext)
-        if vim.uv.fs_stat(mason_pkg) then
-          return mason_pkg
-        end
-
-        -- 2. Check ~/go/bin
+        -- 1. Check ~/go/bin
         local go_bin = vim.fs.joinpath(vim.fn.expand("~/go/bin"), "dlv" .. ext)
         if vim.uv.fs_stat(go_bin) then
           return go_bin
@@ -1334,7 +1525,7 @@ require("lazy").setup({
         max_width_window_percentage = 90,
         max_height_window_percentage = 80,
         window_overlap_clear_enabled = true,
-        window_overlap_clear_ft_ignore = { "cmp_menu", "cmp_docs", "aerial", "NvimTree", "" },
+        window_overlap_clear_ft_ignore = { "blink-cmp-menu", "blink-cmp-documentation", "aerial", "NvimTree", "" },
         ignore_download_error = true,
         hijack_file_patterns = { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.bmp", "*.tiff", "*.ico", "*.svg" },
       })
@@ -1447,7 +1638,6 @@ require("lazy").setup({
         override = {
           ["vim.lsp.util.convert_input_to_markdown_lines"] = true,
           ["vim.lsp.util.styled_parts"] = true,
-          ["cmp.entry.get_documentation"] = true,
         },
       },
       presets = {
@@ -1496,12 +1686,87 @@ require("lazy").setup({
 -- =========================================================================
 
 local capabilities = vim.lsp.protocol.make_client_capabilities()
-local has_cmp, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
-if has_cmp then capabilities = cmp_nvim_lsp.default_capabilities(capabilities) end
+local has_blink, blink = pcall(require, "blink.cmp")
+if has_blink then
+  capabilities = blink.get_lsp_capabilities(capabilities)
+end
 
 vim.lsp.config("*", { capabilities = capabilities })
-vim.lsp.config("html", { cmd = { "vscode-html-language-server", "--stdio" }, filetypes = { "html", "templ" } })   
-vim.lsp.config("ts_ls", { cmd = { "typescript-language-server", "--stdio" }, filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" } })  
+
+-- TypeScript / JavaScript LSP (vtsls - High-performance VS Code TypeScript Language Service)
+vim.lsp.config("vtsls", {
+  cmd = { "vtsls", "--stdio" },
+  filetypes = {
+    "javascript",
+    "javascriptreact",
+    "javascript.jsx",
+    "typescript",
+    "typescriptreact",
+    "typescript.tsx",
+  },
+  root_markers = { "tsconfig.json", "package.json", "jsconfig.json", ".git" },
+  settings = {
+    complete_function_calls = true,
+    vtsls = {
+      enableMoveToFileCodeAction = true,
+      autoUseWorkspaceTsdk = true,
+      experimental = {
+        completion = {
+          enableServerSideFuzzyMatch = true,
+        },
+      },
+    },
+    typescript = {
+      updateImportsOnFileMove = { enabled = "always" },
+      suggest = {
+        completeFunctionCalls = true,
+      },
+      inlayHints = {
+        parameterNames = { enabled = "literals" },
+        parameterTypes = { enabled = true },
+        variableTypes = { enabled = false },
+        propertyDeclarationTypes = { enabled = true },
+        functionLikeReturnTypes = { enabled = true },
+        enumMemberValues = { enabled = true },
+      },
+    },
+    javascript = {
+      updateImportsOnFileMove = { enabled = "always" },
+      suggest = {
+        completeFunctionCalls = true,
+      },
+      inlayHints = {
+        parameterNames = { enabled = "literals" },
+        parameterTypes = { enabled = true },
+        variableTypes = { enabled = false },
+        propertyDeclarationTypes = { enabled = true },
+        functionLikeReturnTypes = { enabled = true },
+        enumMemberValues = { enabled = true },
+      },
+    },
+  },
+})
+
+-- Oxc / Oxlint LSP (Fast Rust-based Linter with LSP mode)
+vim.lsp.config("oxlint", {
+  cmd = { "oxlint", "--lsp" },
+  filetypes = {
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact",
+    "vue",
+    "svelte",
+    "astro",
+  },
+  root_markers = {
+    ".oxlintrc.json",
+    ".oxlintrc.jsonc",
+    "oxlint.config.ts",
+    "package.json",
+    ".git",
+  },
+})
 
 vim.lsp.config("clangd", { cmd = { "clangd" }, filetypes = { "c", "cpp", "objc", "objcpp" } })
 local basedpyright_analysis = {
@@ -1578,7 +1843,7 @@ vim.lsp.config("gopls", {
   filetypes = { "go", "gomod", "gowork", "gotmpl" },
   root_markers = { "go.mod", "go.work", ".git" },
   settings = {
-    gopls = { completeUnimported = true, usePlaceholders = true, analyses = { unusedparams = true }, semanticTokens = true },
+    gopls = { completeUnimported = true, usePlaceholders = true, analyses = { unusedparams = true, unusedvariable = true, unusedwrite = true }, semanticTokens = true },
   },
 })
 
@@ -1613,14 +1878,15 @@ vim.lsp.config("texlab", {
   filetypes = { "tex", "plaintex", "bib" },
 })
 
-vim.lsp.enable("html")
-vim.lsp.enable("ts_ls")
+vim.lsp.enable("vtsls")
+vim.lsp.enable("oxlint")
 vim.lsp.enable("clangd")
 vim.lsp.enable("basedpyright")
 vim.lsp.enable("rust_analyzer")
 vim.lsp.enable("gopls")
 vim.lsp.enable("jdtls")
 vim.lsp.enable("texlab")
+vim.lsp.enable("taplo")
 
 vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(args)
@@ -1642,7 +1908,8 @@ vim.api.nvim_create_autocmd("LspAttach", {
     end
 
     vim.keymap.set("n", "gr", show_references, { buffer = bufnr, silent = true, desc = "LSP Go to References (Telescope)" })
-    vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
+    vim.keymap.set("n", "gh", vim.lsp.buf.hover, { buffer = bufnr, silent = true, desc = "LSP Hover Documentation" })
+    vim.keymap.set("n", "<leader>k", vim.lsp.buf.hover, { buffer = bufnr, silent = true, desc = "LSP Hover Documentation" })
     vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, { buffer = bufnr, silent = true, desc = "Code Action" })
     vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, { buffer = bufnr, silent = true, desc = "Rename Symbol" })
   end,
@@ -1666,6 +1933,7 @@ vim.opt.selectmode = "key,mouse"
 vim.opt.ignorecase = true  
 vim.opt.smartcase = true   
 vim.opt.updatetime = 300   -- Fast CursorHold trigger for diagnostic popups
+vim.opt.sessionoptions = { "buffers", "curdir", "folds", "help", "tabpages", "winsize", "winpos", "terminal" } -- Exclude 'blank' to avoid saving empty/untitled placeholder windows
 
 vim.diagnostic.config({
   float = {
@@ -1865,6 +2133,28 @@ vim.api.nvim_create_user_command("ClearProjects", function()
   print("Project history cleared. (Restart Neovim to reflect changes)")
 end, { desc = "Wipe the recent projects list from Telescope" })
 
+-- Utility Command: Asynchronously delete file or folder in background (:AsyncDelete [path])
+vim.api.nvim_create_user_command("AsyncDelete", function(opts)
+  local path = (opts.args ~= "") and vim.fn.expand(opts.args) or vim.api.nvim_buf_get_name(0)
+  if not path or path == "" then
+    vim.notify("No file or path specified to delete", vim.log.levels.WARN, { title = "Async Delete" })
+    return
+  end
+  local name = vim.fn.fnamemodify(path, ":t")
+  local is_dir = vim.fn.isdirectory(path) == 1
+  local prompt_msg = string.format("Delete %s '%s' in background? [y/N]: ", is_dir and "folder" or "file", name)
+  vim.ui.input({ prompt = prompt_msg }, function(choice)
+    if choice and (choice:lower() == "y" or choice:lower() == "yes") then
+      if _G.Async_Delete_Path then
+        _G.Async_Delete_Path(path, function()
+          local status_tree, tree_api = pcall(require, "nvim-tree.api")
+          if status_tree then pcall(tree_api.tree.reload) end
+        end)
+      end
+    end
+  end)
+end, { nargs = "?", complete = "file", desc = "Delete file or directory asynchronously in background" })
+
 -- Search Upgrades
 vim.keymap.set('n', '/', '/\\V', { noremap = true, desc = "Literal Search Forward" })
 vim.keymap.set('v', '/', '/\\V', { noremap = true, desc = "Literal Search Forward" })
@@ -1895,7 +2185,8 @@ vim.keymap.set('n', '<leader>fb', function()
         _G._project_root = dir
         vim.cmd("cd " .. vim.fn.fnameescape(dir))
         vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
-        vim.cmd("enew")
+        local scratch_buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_set_current_buf(scratch_buf)
       end
 
       map("i", "<C-o>", open_as_project)
@@ -2000,6 +2291,7 @@ end, { noremap = true, silent = true, desc = "Toggle Code Structure Sidebar" })
 vim.keymap.set('n', '<leader>h', function()
   if vim.bo.filetype == "alpha" then return end
   pcall(function() require("aerial").close() end)
+  pcall(function() require("nvim-tree.api").tree.close() end)
   vim.cmd("silent! wall") -- Save all modified buffers first
   -- Reset cwd to the tracked project root before saving
   if _G._project_root and vim.fn.isdirectory(_G._project_root) == 1 then
@@ -2135,8 +2427,59 @@ vim.keymap.set('i', '<C-z>', '<C-o>u', { noremap = true, silent = true })
 vim.keymap.set('n', '<C-y>', '<C-r>', { noremap = true, silent = true })
 vim.keymap.set('i', '<C-y>', '<C-o><C-r>', { noremap = true, silent = true })
 vim.keymap.set('n', '<Esc>', ':nohlsearch<CR>', { noremap = true, silent = true })
-vim.keymap.set({ 'i', 'v', 's', 'c' }, '<C-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set('n', '<C-j>', ':nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-J>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-S-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set('n', '<M-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set('n', '<M-J>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set('n', '<M-S-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+
+-- Home & End Navigation (Alt+h / Alt+l)
+-- Insert mode: Remains in insert mode; moves cursor before start of line or after end of line
+vim.keymap.set('i', '<M-h>', '<Home>', { noremap = true, silent = true, desc = "Go to Line Start (Insert)" })
+vim.keymap.set('i', '<M-l>', '<End>', { noremap = true, silent = true, desc = "Go to Line End (Insert)" })
+-- Normal & Visual modes: Move cursor or extend visual selection to line start/end
+vim.keymap.set({ 'n', 'v', 'x' }, '<M-h>', '0', { noremap = true, silent = true, desc = "Go to Line Start" })
+vim.keymap.set({ 'n', 'v', 'x' }, '<M-l>', '$', { noremap = true, silent = true, desc = "Go to Line End" })
+
+-- Home & End Selection with Shift (Alt+Shift+h / Alt+Shift+l)
+local function select_to_line_start_from_insert()
+  local col = vim.fn.col('.')
+  vim.cmd('stopinsert')
+  if col <= 1 then
+    vim.cmd('normal! v0')
+    return
+  end
+  vim.cmd('normal! v0')
+end
+
+local function select_to_line_end_from_insert()
+  local col = vim.fn.col('.')
+  local line_len = #vim.api.nvim_get_current_line()
+  vim.cmd('stopinsert')
+  if col > line_len then
+    return
+  end
+  local pos = vim.api.nvim_win_get_cursor(0)
+  vim.api.nvim_win_set_cursor(0, { pos[1], col - 1 })
+  vim.cmd('normal! v$')
+end
+
+vim.keymap.set('i', '<M-S-h>', select_to_line_start_from_insert, { noremap = true, silent = true, desc = "Select to Line Start from Insert" })
+vim.keymap.set('i', '<M-H>', select_to_line_start_from_insert, { noremap = true, silent = true, desc = "Select to Line Start from Insert" })
+vim.keymap.set('i', '<M-S-l>', select_to_line_end_from_insert, { noremap = true, silent = true, desc = "Select to Line End from Insert" })
+vim.keymap.set('i', '<M-L>', select_to_line_end_from_insert, { noremap = true, silent = true, desc = "Select to Line End from Insert" })
+
+vim.keymap.set('n', '<M-S-h>', 'v0', { noremap = true, silent = true, desc = "Select to Line Start" })
+vim.keymap.set('n', '<M-H>', 'v0', { noremap = true, silent = true, desc = "Select to Line Start" })
+vim.keymap.set('n', '<M-S-l>', 'v$', { noremap = true, silent = true, desc = "Select to Line End" })
+vim.keymap.set('n', '<M-L>', 'v$', { noremap = true, silent = true, desc = "Select to Line End" })
+
+vim.keymap.set({ 'v', 'x' }, '<M-S-h>', '0', { noremap = true, silent = true, desc = "Extend Selection to Line Start" })
+vim.keymap.set({ 'v', 'x' }, '<M-H>', '0', { noremap = true, silent = true, desc = "Extend Selection to Line Start" })
+vim.keymap.set({ 'v', 'x' }, '<M-S-l>', '$', { noremap = true, silent = true, desc = "Extend Selection to Line End" })
+vim.keymap.set({ 'v', 'x' }, '<M-L>', '$', { noremap = true, silent = true, desc = "Extend Selection to Line End" })
+
 
 -- Open in OS Viewer
 vim.keymap.set('n', '<leader>o', function()
@@ -2197,6 +2540,56 @@ for _, mode in ipairs(modes) do
   vim.keymap.set(mode, 'P', (mode == 's' and '<C-g>' or '') .. '"_dP', { noremap = true })
 end
 
+-- Directional Visual Selection Keybindings (Shift + H/J/K/L, Shift + W/B, Shift + Arrows)
+-- Shift + H: Select word backward (left in line)
+vim.keymap.set('n', 'H', 'vb', { noremap = true, silent = true, desc = "Select word backward" })
+vim.keymap.set('n', '<S-h>', 'vb', { noremap = true, silent = true, desc = "Select word backward" })
+vim.keymap.set({ 'v', 'x' }, 'H', 'b', { noremap = true, silent = true, desc = "Extend selection word backward" })
+vim.keymap.set({ 'v', 'x' }, '<S-h>', 'b', { noremap = true, silent = true, desc = "Extend selection word backward" })
+
+-- Shift + L: Select word forward (right in line)
+vim.keymap.set('n', 'L', 'vw', { noremap = true, silent = true, desc = "Select word forward" })
+vim.keymap.set('n', '<S-l>', 'vw', { noremap = true, silent = true, desc = "Select word forward" })
+vim.keymap.set({ 'v', 'x' }, 'L', 'w', { noremap = true, silent = true, desc = "Extend selection word forward" })
+vim.keymap.set({ 'v', 'x' }, '<S-l>', 'w', { noremap = true, silent = true, desc = "Extend selection word forward" })
+
+-- Shift + J: Select multiple lines downward
+vim.keymap.set('n', 'J', 'vj', { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('n', '<S-j>', 'vj', { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set({ 'v', 'x' }, 'J', 'j', { noremap = true, silent = true, desc = "Extend selection downward" })
+vim.keymap.set({ 'v', 'x' }, '<S-j>', 'j', { noremap = true, silent = true, desc = "Extend selection downward" })
+
+-- Shift + K: Select multiple lines upward
+vim.keymap.set('n', 'K', 'vk', { noremap = true, silent = true, desc = "Select line upward" })
+vim.keymap.set('n', '<S-k>', 'vk', { noremap = true, silent = true, desc = "Select line upward" })
+vim.keymap.set({ 'v', 'x' }, 'K', 'k', { noremap = true, silent = true, desc = "Extend selection upward" })
+vim.keymap.set({ 'v', 'x' }, '<S-k>', 'k', { noremap = true, silent = true, desc = "Extend selection upward" })
+
+-- Shift + W: Select forward WORD (enters Visual mode and extends selection)
+vim.keymap.set('n', 'W', 'vW', { noremap = true, silent = true, desc = "Select forward WORD" })
+vim.keymap.set('n', '<S-w>', 'vW', { noremap = true, silent = true, desc = "Select forward WORD" })
+vim.keymap.set({ 'v', 'x' }, 'W', 'W', { noremap = true, silent = true, desc = "Extend selection forward WORD" })
+vim.keymap.set({ 'v', 'x' }, '<S-w>', 'W', { noremap = true, silent = true, desc = "Extend selection forward WORD" })
+
+-- Shift + B: Select backward WORD (enters Visual mode and extends selection)
+vim.keymap.set('n', 'B', 'vB', { noremap = true, silent = true, desc = "Select backward WORD" })
+vim.keymap.set('n', '<S-b>', 'vB', { noremap = true, silent = true, desc = "Select backward WORD" })
+vim.keymap.set({ 'v', 'x' }, 'B', 'B', { noremap = true, silent = true, desc = "Extend selection backward WORD" })
+vim.keymap.set({ 'v', 'x' }, '<S-b>', 'B', { noremap = true, silent = true, desc = "Extend selection backward WORD" })
+
+-- Shift + Arrow Keys Selection
+vim.keymap.set('n', '<S-Down>', 'vj', { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('n', '<S-Up>', 'vk', { noremap = true, silent = true, desc = "Select line upward" })
+vim.keymap.set('n', '<S-Left>', 'vb', { noremap = true, silent = true, desc = "Select word backward" })
+vim.keymap.set('n', '<S-Right>', 'vw', { noremap = true, silent = true, desc = "Select word forward" })
+vim.keymap.set({ 'v', 'x' }, '<S-Down>', 'j', { noremap = true, silent = true, desc = "Extend selection downward" })
+vim.keymap.set({ 'v', 'x' }, '<S-Up>', 'k', { noremap = true, silent = true, desc = "Extend selection upward" })
+vim.keymap.set({ 'v', 'x' }, '<S-Left>', 'b', { noremap = true, silent = true, desc = "Extend selection word backward" })
+vim.keymap.set({ 'v', 'x' }, '<S-Right>', 'w', { noremap = true, silent = true, desc = "Extend selection word forward" })
+
+-- Join lines alternative (since J is now selection downward)
+vim.keymap.set('n', 'gJ', 'J', { noremap = true, silent = true, desc = "Join Lines" })
+
 -- =========================================================================
 -- 6. VS CODE STYLE COPY / CUT / PASTE 
 -- =========================================================================
@@ -2212,10 +2605,9 @@ vim.keymap.set('i', '<C-x>', '<C-o>dd', { noremap = true, silent = true })
 vim.keymap.set('i', '<C-v>', '<C-r>+', { noremap = true, silent = true })
 
 vim.keymap.set('n', '<leader>U', function()
-  print("Starting safe system update...")
+  print("Updating plugins...")
   vim.cmd("Lazy update")
-  vim.cmd("MasonToolsUpdate")
-end, { noremap = true, silent = true, desc = "Update Plugins & Tools" })
+end, { noremap = true, silent = true, desc = "Update Plugins (Lazy)" })
 
 
 -- =========================================================================
