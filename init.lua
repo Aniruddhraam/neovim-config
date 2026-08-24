@@ -2442,6 +2442,17 @@ vim.keymap.set('n', '<M-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = t
 vim.keymap.set('n', '<M-J>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
 vim.keymap.set('n', '<M-S-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
 
+-- Escape with Alt+u
+vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-u>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-U>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-S-u>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set('n', '<M-u>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set('n', '<M-U>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set('n', '<M-S-u>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+
+-- Backspace with Alt+b
+vim.keymap.set({ 'i', 'c' }, '<M-b>', '<BS>', { noremap = true, silent = true, desc = "Backspace" })
+
 -- Insert Mode Directional Navigation (Alt + h/j/k/l)
 vim.keymap.set('i', '<M-h>', '<Left>',  { noremap = true, silent = true, desc = "Move Left (Insert)" })
 vim.keymap.set('i', '<M-j>', '<Down>',  { noremap = true, silent = true, desc = "Move Down (Insert)" })
