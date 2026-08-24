@@ -1217,6 +1217,8 @@ require("lazy").setup({
         ["<CR>"] = { "accept", "fallback" },
         ["<Tab>"] = { "select_next", "snippet_forward", "fallback" },
         ["<S-Tab>"] = { "select_prev", "snippet_backward", "fallback" },
+        ["<Up>"] = { "fallback" },
+        ["<Down>"] = { "fallback" },
         ["<C-b>"] = { "scroll_documentation_up", "fallback" },
         ["<C-f>"] = { "scroll_documentation_down", "fallback" },
       },
@@ -1228,6 +1230,12 @@ require("lazy").setup({
         default = { "lsp", "path", "snippets", "buffer" },
       },
       completion = {
+        list = {
+          selection = {
+            preselect = false,
+            auto_insert = false,
+          },
+        },
         menu = {
           border = "rounded",
         },
@@ -2427,17 +2435,23 @@ vim.keymap.set('i', '<C-z>', '<C-o>u', { noremap = true, silent = true })
 vim.keymap.set('n', '<C-y>', '<C-r>', { noremap = true, silent = true })
 vim.keymap.set('i', '<C-y>', '<C-o><C-r>', { noremap = true, silent = true })
 vim.keymap.set('n', '<Esc>', ':nohlsearch<CR>', { noremap = true, silent = true })
-vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-J>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-S-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-J>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-S-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
 vim.keymap.set('n', '<M-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
 vim.keymap.set('n', '<M-J>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
 vim.keymap.set('n', '<M-S-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
 
--- Home & End Navigation (Alt+h / Alt+l)
--- Insert mode: Remains in insert mode; moves cursor before start of line or after end of line
-vim.keymap.set('i', '<M-h>', '<Home>', { noremap = true, silent = true, desc = "Go to Line Start (Insert)" })
-vim.keymap.set('i', '<M-l>', '<End>', { noremap = true, silent = true, desc = "Go to Line End (Insert)" })
+-- Insert Mode Directional Navigation (Alt + h/j/k/l)
+vim.keymap.set('i', '<M-h>', '<Left>',  { noremap = true, silent = true, desc = "Move Left (Insert)" })
+vim.keymap.set('i', '<M-j>', '<Down>',  { noremap = true, silent = true, desc = "Move Down (Insert)" })
+vim.keymap.set('i', '<M-k>', '<Up>',    { noremap = true, silent = true, desc = "Move Up (Insert)" })
+vim.keymap.set('i', '<M-l>', '<Right>', { noremap = true, silent = true, desc = "Move Right (Insert)" })
+
+-- Home & End Navigation
+-- Insert mode: Ctrl+h (Home) / Ctrl+l (End)
+vim.keymap.set('i', '<C-h>', '<Home>', { noremap = true, silent = true, desc = "Go to Line Start (Insert)" })
+vim.keymap.set('i', '<C-l>', '<End>',  { noremap = true, silent = true, desc = "Go to Line End (Insert)" })
 -- Normal & Visual modes: Move cursor or extend visual selection to line start/end
 vim.keymap.set({ 'n', 'v', 'x' }, '<M-h>', '0', { noremap = true, silent = true, desc = "Go to Line Start" })
 vim.keymap.set({ 'n', 'v', 'x' }, '<M-l>', '$', { noremap = true, silent = true, desc = "Go to Line End" })
@@ -2619,6 +2633,44 @@ if status_ok then
   local lazygit = Terminal:new({ cmd = "lazygit", hidden = true, direction = "float", float_opts = { border = "curved" } })
   function _lazygit_toggle() lazygit:toggle() end
   vim.keymap.set('n', '<leader>gg', '<cmd>lua _lazygit_toggle()<CR>', { noremap = true, silent = true, desc = "Toggle Lazygit" })
+
+  -- In-Terminal Browser (Browsh with TrueColor support for WezTerm / Kitty / Ghostty)
+  local browsh_cmd = vim.fn.executable("browsh") == 1 and "browsh" or (vim.fn.executable("browsh.exe") == 1 and "browsh.exe" or "browsh")
+  local browser = Terminal:new({
+    cmd = browsh_cmd,
+    hidden = true,
+    direction = "float",
+    float_opts = {
+      border = "curved",
+      width = function() return math.floor(vim.o.columns * 0.96) end,
+      height = function() return math.floor(vim.o.lines * 0.94) end,
+      winblend = 0,
+    },
+    env = {
+      COLORTERM = "truecolor",
+      TERM = (vim.env.TERM and vim.env.TERM ~= "" and vim.env.TERM) or "xterm-256color",
+    },
+    on_open = function(term)
+      vim.cmd("startinsert!")
+      -- Pressing <leader>b inside browser terminal minimizes/hides it back to editor
+      vim.keymap.set('t', '<leader>b', function()
+        term:toggle()
+      end, { buffer = term.bufnr, noremap = true, silent = true, desc = "Hide Browser" })
+    end,
+  })
+
+  function _G.Toggle_Browser()
+    if vim.fn.executable(browsh_cmd) ~= 1 then
+      local is_windows = vim.fn.has("win32") == 1
+      local hint = is_windows
+        and "Browsh not found. Install via: 'scoop install browsh' or 'winget install browsh' (and ensure Firefox is installed)."
+        or "Browsh not found. Install via package manager / AUR / brew: 'brew install browsh' (and ensure Firefox is installed)."
+      vim.notify(hint, vim.log.levels.WARN, { title = "Browser (Browsh)" })
+    end
+    browser:toggle()
+  end
+
+  vim.keymap.set({ 'n', 't' }, '<leader>b', '<cmd>lua _G.Toggle_Browser()<CR>', { noremap = true, silent = true, desc = "Toggle In-Terminal Browser (Browsh)" })
 
   local function get_terms()
       local terms = {}
