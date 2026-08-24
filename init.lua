@@ -105,7 +105,8 @@ require("lazy").setup({
   -- Custom Heads-Up Display Dashboard
   {
     "goolord/alpha-nvim",
-    event = "VimEnter",
+    lazy = false,
+    priority = 900,
     dependencies = { 'nvim-tree/nvim-web-devicons' },
     config = function()
       local alpha = require("alpha")
@@ -249,20 +250,20 @@ require("lazy").setup({
                   else
                       if row <= #logo then
                           local target_line = logo[row]
-                          col = col + 2
+                          col = col + 3
                           if col > #target_line then col = #target_line end
                           dashboard.section.header.val[row] = target_line:sub(1, col)
                           needs_redraw = true
                           if col >= #target_line then
                               row, col = row + 1, 1
-                              if row > #logo then pause_ticks = 75 end
+                              if row > #logo then pause_ticks = 70 end
                           end
                       end
                   end
 
                   local current_info = get_datetime()
                   if not info_typed then
-                      info_col = info_col + 1
+                      info_col = info_col + 2
                       if info_col >= #current_info then
                           info_col, info_typed = #current_info, true
                       end
@@ -276,7 +277,7 @@ require("lazy").setup({
                   end
                   
                   if needs_redraw then pcall(vim.cmd.AlphaRedraw) end
-                  vim.defer_fn(draw_frame, 15)
+                  vim.defer_fn(draw_frame, 10)
               end
               draw_frame()
           end,
@@ -287,6 +288,8 @@ require("lazy").setup({
   -- Automated Session Management (Restores tabs automatically)
   {
     "rmagatti/auto-session",
+    event = "VeryLazy",
+    cmd = { "AutoSession", "SessionSave", "SessionRestore", "SessionDelete", "SessionSearch" },
     config = function()
       local function clean_unnamed_buffers()
         -- 1. Wipe unlisted/unnamed empty scratch buffers
@@ -373,6 +376,7 @@ require("lazy").setup({
   -- Project Root Detection & Management
   {
     "coffebar/project.nvim",
+    event = "VeryLazy",
     config = function()
       require("project_nvim").setup({
         manual_mode = true, -- Don't auto-change cwd; we track it explicitly
@@ -396,7 +400,8 @@ require("lazy").setup({
   -- Code Outline Sidebar (Aerial)
   {
     "stevearc/aerial.nvim",
-    lazy = false,
+    event = "VeryLazy",
+    cmd = { "AerialToggle", "AerialOpen", "AerialOpenAll", "AerialClose", "AerialCloseAll", "AerialNext", "AerialPrev" },
     dependencies = {
        "nvim-treesitter/nvim-treesitter",
        "nvim-tree/nvim-web-devicons"
@@ -480,6 +485,8 @@ require("lazy").setup({
   {
     "nvim-telescope/telescope.nvim",
     branch = "master", -- Force master branch to fix 'Invalid buffer id' crash
+    event = "VeryLazy",
+    cmd = "Telescope",
     dependencies = { 
         "nvim-lua/plenary.nvim", 
         "nvim-tree/nvim-web-devicons",
@@ -544,10 +551,16 @@ require("lazy").setup({
             i = {
               ["<C-e>"] = open_in_tree, -- Press Ctrl+e in any telescope window to jump to the tree
               ["<Esc>"] = actions.close,
+              ["<M-u>"] = actions.close,
+              ["<M-j>"] = actions.move_selection_next,
+              ["<M-k>"] = actions.move_selection_previous,
             },
             n = {
               ["<C-e>"] = open_in_tree,
               ["<Esc>"] = actions.close,
+              ["<M-u>"] = actions.close,
+              ["<M-j>"] = actions.move_selection_next,
+              ["<M-k>"] = actions.move_selection_previous,
             }
           }
         },
@@ -575,6 +588,8 @@ require("lazy").setup({
   -- Persistent File Explorer
   {
     "nvim-tree/nvim-tree.lua",
+    event = "VeryLazy",
+    cmd = { "NvimTreeToggle", "NvimTreeOpen", "NvimTreeFocus", "NvimTreeFindFile", "NvimTreeCollapse", "NvimTreeRefresh" },
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       local is_win = vim.fn.has("win32") == 1
@@ -749,6 +764,7 @@ require("lazy").setup({
   -- Visual Tabs
   { 
     "akinsho/bufferline.nvim", 
+    event = "VeryLazy",
     version = "*", 
     dependencies = "nvim-tree/nvim-web-devicons", 
     config = function() 
@@ -766,7 +782,7 @@ require("lazy").setup({
   -- Syntax Highlighting (Treesitter)
   {
     "nvim-treesitter/nvim-treesitter",
-    lazy = false,
+    event = "VeryLazy",
     build = ":TSUpdate",
     config = function()
       require("nvim-treesitter").setup({
@@ -798,6 +814,8 @@ require("lazy").setup({
   -- Formatting & Intelligent Error Handling
   {
     "stevearc/conform.nvim",
+    event = "VeryLazy",
+    cmd = { "Format", "ConformErrors", "ConformInfo" },
     config = function()
       local conform = require("conform")
       local conform_ns = vim.api.nvim_create_namespace("conform_formatter_errors")
@@ -1205,6 +1223,7 @@ require("lazy").setup({
   -- Next-Gen High Performance Autocompletion Engine (Rust SIMD-accelerated fuzzy matching)
   {
     "saghen/blink.cmp",
+    event = "VeryLazy",
     version = "*",
     dependencies = {
       "rafamadriz/friendly-snippets",
@@ -1261,6 +1280,7 @@ require("lazy").setup({
   -- Diagnostics & Errors Panel
   {
     "folke/trouble.nvim",
+    cmd = { "Trouble" },
     dependencies = { "nvim-tree/nvim-web-devicons" },
     opts = { modes = { diagnostics = { auto_preview = true } } },
     keys = {
@@ -1291,6 +1311,8 @@ require("lazy").setup({
   -- =========================================================================
   {
     "mfussenegger/nvim-dap",
+    event = "VeryLazy",
+    cmd = { "DapContinue", "DapToggleBreakpoint", "DapStepOver", "DapStepInto", "DapStepOut", "DapTerminate" },
     dependencies = {
       {
         "rcarriga/nvim-dap-ui",
@@ -1470,7 +1492,8 @@ require("lazy").setup({
   {
     "benlubas/molten-nvim",
     version = "^1.0.0",
-    lazy = false,
+    ft = { "python", "ipynb" },
+    cmd = { "MoltenInit", "MoltenEvaluateCell", "MoltenReevaluateCell", "MoltenDelete", "MoltenShowOutput" },
     build = ":UpdateRemotePlugins",
     init = function()
       vim.g.molten_image_provider = "image.nvim"
@@ -1490,10 +1513,11 @@ require("lazy").setup({
     },
   },
 
-  { "echasnovski/mini.bufremove", version = "*", config = function() require("mini.bufremove").setup() end },
-  { "mechatroner/rainbow_csv", event = "BufRead" },
+  { "echasnovski/mini.bufremove", version = "*", event = "VeryLazy", config = function() require("mini.bufremove").setup() end },
+  { "mechatroner/rainbow_csv", ft = { "csv", "tsv" }, cmd = { "RainbowDelim", "RainbowDelimSimple", "RainbowDelimQuoted", "NoRainbowDelim" } },
   {
     "nvim-lualine/lualine.nvim",
+    event = "VeryLazy",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       require("lualine").setup({
@@ -1505,12 +1529,14 @@ require("lazy").setup({
       })
     end,
   },
-  { "echasnovski/mini.pairs", version = "*", config = function() require("mini.pairs").setup() end },
+  { "echasnovski/mini.pairs", version = "*", event = "VeryLazy", config = function() require("mini.pairs").setup() end },
   { "folke/which-key.nvim", event = "VeryLazy", config = function() require("which-key").setup({ delay = 500, win = { border = "rounded" } }) end },
-  { "lewis6991/gitsigns.nvim", config = function() require("gitsigns").setup({ current_line_blame = true, current_line_blame_opts = { delay = 500, virt_text_pos = 'eol' } }) end },
+  { "lewis6991/gitsigns.nvim", event = "VeryLazy", config = function() require("gitsigns").setup({ current_line_blame = true, current_line_blame_opts = { delay = 500, virt_text_pos = 'eol' } }) end },
   {
     "akinsho/toggleterm.nvim",
     version = "*",
+    event = "VeryLazy",
+    cmd = { "ToggleTerm", "ToggleTermToggleAll", "TermExec" },
     config = function()
       require("toggleterm").setup({
         size = 20, open_mapping = [[<c-\>]], direction = "float", shade_terminals = false, float_opts = { border = "curved" },
@@ -1593,7 +1619,7 @@ require("lazy").setup({
   {
     "echasnovski/mini.indentscope",
     version = "*",
-    event = { "BufReadPre", "BufNewFile" },
+    event = "VeryLazy",
     opts = {
       symbol = "│",
       options = { try_as_border = true },
@@ -1633,7 +1659,7 @@ require("lazy").setup({
   -- IDE Breadcrumb Navigation Winbar
   {
     "Bekaboo/dropbar.nvim",
-    event = { "BufReadPre", "BufNewFile" },
+    event = "VeryLazy",
   },
 
   -- Modern Floating Cmdline, Notifications & Messages
@@ -1660,7 +1686,7 @@ require("lazy").setup({
   -- Real-Time Color Code Swatches
   {
     "brenoprata10/nvim-highlight-colors",
-    event = "BufReadPre",
+    event = "VeryLazy",
     opts = {
       render = "background",
       enable_named_colors = true,
@@ -1672,7 +1698,7 @@ require("lazy").setup({
   -- Sleek Diagnostic & Git Scrollbar
   {
     "petertriho/nvim-scrollbar",
-    event = "BufReadPre",
+    event = "VeryLazy",
     opts = {
       handlers = {
         cursor = true,
@@ -2170,10 +2196,9 @@ vim.keymap.set('n', '?', '?\\V', { noremap = true, desc = "Literal Search Backwa
 vim.keymap.set('v', '?', '?\\V', { noremap = true, desc = "Literal Search Backward" })
 
 -- Telescope File Finders
-local builtin = require('telescope.builtin')
-vim.keymap.set('n', '<C-f>', builtin.current_buffer_fuzzy_find, { noremap = true, silent = true, desc = "Fuzzy Find in File" })
-vim.keymap.set('n', '<leader>f', builtin.find_files, { noremap = true, silent = true, desc = "Find Files" })
-vim.keymap.set('n', '<leader>F', builtin.live_grep, { noremap = true, silent = true, desc = "Find Text" })
+vim.keymap.set('n', '<C-f>', function() require('telescope.builtin').current_buffer_fuzzy_find() end, { noremap = true, silent = true, desc = "Fuzzy Find in File" })
+vim.keymap.set('n', '<leader>f', function() require('telescope.builtin').find_files() end, { noremap = true, silent = true, desc = "Find Files" })
+vim.keymap.set('n', '<leader>F', function() require('telescope.builtin').live_grep() end, { noremap = true, silent = true, desc = "Find Text" })
 vim.keymap.set('n', '<leader>fb', function()
   require('telescope').extensions.file_browser.file_browser({
     attach_mappings = function(prompt_bufnr, map)
@@ -2638,127 +2663,136 @@ end, { noremap = true, silent = true, desc = "Update Plugins (Lazy)" })
 -- =========================================================================
 -- 8. TERMINAL MULTIPLEXING
 -- =========================================================================
-local status_ok, tt_api = pcall(require, "toggleterm.terminal")
-if status_ok then
-  local Terminal = tt_api.Terminal
-  local lazygit = Terminal:new({ cmd = "lazygit", hidden = true, direction = "float", float_opts = { border = "curved" } })
-  function _lazygit_toggle() lazygit:toggle() end
-  vim.keymap.set('n', '<leader>gg', '<cmd>lua _lazygit_toggle()<CR>', { noremap = true, silent = true, desc = "Toggle Lazygit" })
-
-  -- In-Terminal Browser (Browsh with TrueColor support for WezTerm / Kitty / Ghostty)
-  local browsh_cmd = vim.fn.executable("browsh") == 1 and "browsh" or (vim.fn.executable("browsh.exe") == 1 and "browsh.exe" or "browsh")
-  local browser = Terminal:new({
-    cmd = browsh_cmd,
-    hidden = true,
-    direction = "float",
-    float_opts = {
-      border = "curved",
-      width = function() return math.floor(vim.o.columns * 0.96) end,
-      height = function() return math.floor(vim.o.lines * 0.94) end,
-      winblend = 0,
-    },
-    env = {
-      COLORTERM = "truecolor",
-      TERM = (vim.env.TERM and vim.env.TERM ~= "" and vim.env.TERM) or "xterm-256color",
-    },
-    on_open = function(term)
-      vim.cmd("startinsert!")
-      -- Pressing <leader>b inside browser terminal minimizes/hides it back to editor
-      vim.keymap.set('t', '<leader>b', function()
-        term:toggle()
-      end, { buffer = term.bufnr, noremap = true, silent = true, desc = "Hide Browser" })
-    end,
-  })
-
-  function _G.Toggle_Browser()
-    if vim.fn.executable(browsh_cmd) ~= 1 then
-      local is_windows = vim.fn.has("win32") == 1
-      local hint = is_windows
-        and "Browsh not found. Install via: 'scoop install browsh' or 'winget install browsh' (and ensure Firefox is installed)."
-        or "Browsh not found. Install via package manager / AUR / brew: 'brew install browsh' (and ensure Firefox is installed)."
-      vim.notify(hint, vim.log.levels.WARN, { title = "Browser (Browsh)" })
-    end
-    browser:toggle()
+local _lazygit_instance = nil
+function _lazygit_toggle()
+  local status_ok, tt_api = pcall(require, "toggleterm.terminal")
+  if not status_ok then return end
+  if not _lazygit_instance then
+    _lazygit_instance = tt_api.Terminal:new({ cmd = "lazygit", hidden = true, direction = "float", float_opts = { border = "curved" } })
   end
-
-  vim.keymap.set({ 'n', 't' }, '<leader>b', '<cmd>lua _G.Toggle_Browser()<CR>', { noremap = true, silent = true, desc = "Toggle In-Terminal Browser (Browsh)" })
-
-  local function get_terms()
-      local terms = {}
-      for _, t in pairs(tt_api.get_all()) do table.insert(terms, t) end
-      table.sort(terms, function(a, b) return a.id < b.id end)
-      return terms
-  end
-
-  function _G.Update_Term_Winbar(win_id)
-      if not win_id or not vim.api.nvim_win_is_valid(win_id) then return end
-      local terms = get_terms()
-      local bar = "  "
-      for _, t in ipairs(terms) do
-          if t.window and t.window == win_id then bar = bar .. "%#String# ● Term " .. t.id .. " %#Normal#  "
-          else bar = bar .. "%#Comment# ○ Term " .. t.id .. " %#Normal#  " end
-      end
-      local buf = vim.api.nvim_win_get_buf(win_id)
-      if vim.bo[buf].filetype == "toggleterm" then pcall(vim.api.nvim_set_option_value, 'winbar', bar, { win = win_id }) end
-  end
-
-  function _G.Term_New()
-      local terms = get_terms()
-      local max_id = 0
-      for _, t in ipairs(terms) do if t.id > max_id then max_id = t.id end; if t:is_open() then t:close() end end
-      vim.cmd((max_id + 1) .. "ToggleTerm direction=float")
-  end
-
-  function _G.Term_Next()
-      local terms = get_terms()
-      if #terms <= 1 then return end
-      for i, t in ipairs(terms) do
-          if t:is_open() then
-              local next_term = terms[i + 1] or terms[1]
-              t:close(); next_term:open(); vim.cmd("startinsert!")
-              return
-          end
-      end
-  end
-
-  function _G.Term_Prev()
-      local terms = get_terms()
-      if #terms <= 1 then return end
-      for i, t in ipairs(terms) do
-          if t:is_open() then
-              local prev_term = terms[i - 1] or terms[#terms]
-              t:close(); prev_term:open(); vim.cmd("startinsert!")
-              return
-          end
-      end
-  end
-
-  function _G.Term_Close()
-      local terms = get_terms()
-      if #terms == 0 then return end
-      for i, t in ipairs(terms) do
-          if t:is_open() then
-              if #terms == 1 then t:shutdown() 
-              else
-                  local next_term = terms[i + 1] or terms[i - 1]
-                  t:shutdown(); next_term:open()
-              end
-              vim.defer_fn(function()
-                  local open_terms = get_terms()
-                  for _, remaining_t in ipairs(open_terms) do
-                      if remaining_t:is_open() and remaining_t.window and vim.api.nvim_win_is_valid(remaining_t.window) then
-                          _G.Update_Term_Winbar(remaining_t.window)
-                      end
-                  end
-                  vim.cmd("startinsert!") 
-              end, 50)
-              return
-          end
-      end
-  end
-
-  vim.keymap.set('t', '<M-t>', '<cmd>lua _G.Term_New()<CR>', { noremap = true, silent = true })
-  vim.keymap.set('t', '<M-w>', '<cmd>lua _G.Term_Close()<CR>', { noremap = true, silent = true })
-  vim.keymap.set('t', '<M-]>', '<cmd>lua _G.Term_Next()<CR>', { noremap = true, silent = true })
-  vim.keymap.set('t', '<M-[>', '<cmd>lua _G.Term_Prev()<CR>', { noremap = true, silent = true })
+  _lazygit_instance:toggle()
 end
+vim.keymap.set('n', '<leader>gg', '<cmd>lua _lazygit_toggle()<CR>', { noremap = true, silent = true, desc = "Toggle Lazygit" })
+
+-- In-Terminal Browser (Browsh with TrueColor support for WezTerm / Kitty / Ghostty)
+local browsh_cmd = vim.fn.executable("browsh") == 1 and "browsh" or (vim.fn.executable("browsh.exe") == 1 and "browsh.exe" or "browsh")
+local _browser_instance = nil
+function _G.Toggle_Browser()
+  local status_ok, tt_api = pcall(require, "toggleterm.terminal")
+  if not status_ok then return end
+  if vim.fn.executable(browsh_cmd) ~= 1 then
+    local is_windows = vim.fn.has("win32") == 1
+    local hint = is_windows
+      and "Browsh not found. Install via: 'scoop install browsh' or 'winget install browsh' (and ensure Firefox is installed)."
+      or "Browsh not found. Install via package manager / AUR / brew: 'brew install browsh' (and ensure Firefox is installed)."
+    vim.notify(hint, vim.log.levels.WARN, { title = "Browser (Browsh)" })
+  end
+  if not _browser_instance then
+    _browser_instance = tt_api.Terminal:new({
+      cmd = browsh_cmd,
+      hidden = true,
+      direction = "float",
+      float_opts = {
+        border = "curved",
+        width = function() return math.floor(vim.o.columns * 0.96) end,
+        height = function() return math.floor(vim.o.lines * 0.94) end,
+        winblend = 0,
+      },
+      env = {
+        COLORTERM = "truecolor",
+        TERM = (vim.env.TERM and vim.env.TERM ~= "" and vim.env.TERM) or "xterm-256color",
+      },
+      on_open = function(term)
+        vim.cmd("startinsert!")
+        -- Pressing <leader>b inside browser terminal minimizes/hides it back to editor
+        vim.keymap.set('t', '<leader>b', function()
+          term:toggle()
+        end, { buffer = term.bufnr, noremap = true, silent = true, desc = "Hide Browser" })
+      end,
+    })
+  end
+  _browser_instance:toggle()
+end
+
+vim.keymap.set({ 'n', 't' }, '<leader>b', '<cmd>lua _G.Toggle_Browser()<CR>', { noremap = true, silent = true, desc = "Toggle In-Terminal Browser (Browsh)" })
+
+local function get_terms()
+  local status_ok, tt_api = pcall(require, "toggleterm.terminal")
+  if not status_ok then return {} end
+  local terms = {}
+  for _, t in pairs(tt_api.get_all()) do table.insert(terms, t) end
+  table.sort(terms, function(a, b) return a.id < b.id end)
+  return terms
+end
+
+function _G.Update_Term_Winbar(win_id)
+  if not win_id or not vim.api.nvim_win_is_valid(win_id) then return end
+  local terms = get_terms()
+  local bar = "  "
+  for _, t in ipairs(terms) do
+    if t.window and t.window == win_id then bar = bar .. "%#String# ● Term " .. t.id .. " %#Normal#  "
+    else bar = bar .. "%#Comment# ○ Term " .. t.id .. " %#Normal#  " end
+  end
+  local buf = vim.api.nvim_win_get_buf(win_id)
+  if vim.bo[buf].filetype == "toggleterm" then pcall(vim.api.nvim_set_option_value, 'winbar', bar, { win = win_id }) end
+end
+
+function _G.Term_New()
+  local terms = get_terms()
+  local max_id = 0
+  for _, t in ipairs(terms) do if t.id > max_id then max_id = t.id end; if t:is_open() then t:close() end end
+  vim.cmd((max_id + 1) .. "ToggleTerm direction=float")
+end
+
+function _G.Term_Next()
+  local terms = get_terms()
+  if #terms <= 1 then return end
+  for i, t in ipairs(terms) do
+    if t:is_open() then
+      local next_term = terms[i + 1] or terms[1]
+      t:close(); next_term:open(); vim.cmd("startinsert!")
+      return
+    end
+  end
+end
+
+function _G.Term_Prev()
+  local terms = get_terms()
+  if #terms <= 1 then return end
+  for i, t in ipairs(terms) do
+    if t:is_open() then
+      local prev_term = terms[i - 1] or terms[#terms]
+      t:close(); prev_term:open(); vim.cmd("startinsert!")
+      return
+    end
+  end
+end
+
+function _G.Term_Close()
+  local terms = get_terms()
+  if #terms == 0 then return end
+  for i, t in ipairs(terms) do
+    if t:is_open() then
+      if #terms == 1 then t:shutdown() 
+      else
+        local next_term = terms[i + 1] or terms[i - 1]
+        t:shutdown(); next_term:open()
+      end
+      vim.defer_fn(function()
+        local open_terms = get_terms()
+        for _, remaining_t in ipairs(open_terms) do
+          if remaining_t:is_open() and remaining_t.window and vim.api.nvim_win_is_valid(remaining_t.window) then
+            _G.Update_Term_Winbar(remaining_t.window)
+          end
+        end
+        vim.cmd("startinsert!") 
+      end, 50)
+      return
+    end
+  end
+end
+
+vim.keymap.set('t', '<M-t>', '<cmd>lua _G.Term_New()<CR>', { noremap = true, silent = true })
+vim.keymap.set('t', '<M-w>', '<cmd>lua _G.Term_Close()<CR>', { noremap = true, silent = true })
+vim.keymap.set('t', '<M-]>', '<cmd>lua _G.Term_Next()<CR>', { noremap = true, silent = true })
+vim.keymap.set('t', '<M-[>', '<cmd>lua _G.Term_Prev()<CR>', { noremap = true, silent = true })
