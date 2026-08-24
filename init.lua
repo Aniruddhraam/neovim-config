@@ -2473,21 +2473,41 @@ vim.keymap.set('n', '<C-z>', 'u', { noremap = true, silent = true })
 vim.keymap.set('i', '<C-z>', '<C-o>u', { noremap = true, silent = true })
 vim.keymap.set('n', '<C-y>', '<C-r>', { noremap = true, silent = true })
 vim.keymap.set('i', '<C-y>', '<C-o><C-r>', { noremap = true, silent = true })
-vim.keymap.set('n', '<Esc>', ':nohlsearch<CR>', { noremap = true, silent = true })
-vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-J>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-S-j>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set('n', '<M-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
-vim.keymap.set('n', '<M-J>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
-vim.keymap.set('n', '<M-S-j>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+-- Universal Smart Escape: Cancels active snippet sessions/placeholders, clears highlights, and cleanly exits to Normal mode
+local function smart_escape()
+  if vim.snippet and vim.snippet.active() then
+    pcall(vim.snippet.stop)
+  end
+  vim.cmd("nohlsearch")
+  local mode = vim.api.nvim_get_mode().mode
+  if mode ~= "n" then
+    vim.cmd("stopinsert")
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+  end
+end
+
+-- Auto-stop snippet sessions when leaving Insert/Select mode so placeholders never trap the cursor or re-select blocks
+vim.api.nvim_create_autocmd("ModeChanged", {
+  pattern = { "i:n", "s:n", "i:v", "s:v" },
+  callback = function()
+    if vim.snippet and vim.snippet.active() then
+      pcall(vim.snippet.stop)
+    end
+  end,
+})
+
+vim.keymap.set('n', '<Esc>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
+vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-j>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-J>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-S-j>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set('n', '<M-j>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set('n', '<M-J>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set('n', '<M-S-j>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search" })
 
 -- Escape with Alt+u
-vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-u>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-U>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'i', 'v', 'x', 's', 'c' }, '<M-S-u>', '<Esc>', { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set('n', '<M-u>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
-vim.keymap.set('n', '<M-U>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
-vim.keymap.set('n', '<M-S-u>', '<cmd>nohlsearch<CR>', { noremap = true, silent = true, desc = "Escape / Clear Search" })
+vim.keymap.set({ 'i', 'n', 'v', 'x', 's', 'c' }, '<M-u>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
+vim.keymap.set({ 'i', 'n', 'v', 'x', 's', 'c' }, '<M-U>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
+vim.keymap.set({ 'i', 'n', 'v', 'x', 's', 'c' }, '<M-S-u>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
 
 -- Backspace with Alt+b
 vim.keymap.set({ 'i', 'c' }, '<M-b>', '<BS>', { noremap = true, silent = true, desc = "Backspace" })
