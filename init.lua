@@ -292,16 +292,30 @@ require("lazy").setup({
     cmd = { "AutoSession", "SessionSave", "SessionRestore", "SessionDelete", "SessionSearch" },
     config = function()
       local function clean_unnamed_buffers()
-        -- 1. Wipe unlisted/unnamed empty scratch buffers
+        -- Collect all buffers currently active in any window (normal or floating)
+        local visible_bufs = {}
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local b = vim.api.nvim_win_get_buf(win)
+            visible_bufs[b] = true
+          end
+        end
+
+        -- 1. Wipe only orphaned, listed empty placeholder/alpha buffers (never delete unlisted/plugin/nui/floating buffers)
         for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
           if vim.api.nvim_buf_is_valid(bufnr) then
             local name = vim.api.nvim_buf_get_name(bufnr)
             local bt = vim.bo[bufnr].buftype
             local ft = vim.bo[bufnr].filetype
             local modified = vim.bo[bufnr].modified
+            local listed = vim.bo[bufnr].buflisted
             local line_count = vim.api.nvim_buf_line_count(bufnr)
             local is_empty = (line_count <= 1 and (vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1] or "") == "")
-            if (name == "" or ft == "alpha") and is_empty and not modified and (bt == "" or bt == "nofile") then
+
+            -- Target Alpha dashboard buffer or empty unnamed listed buffer created during startup
+            if ft == "alpha" then
+              pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+            elseif listed and name == "" and bt == "" and is_empty and not modified and not visible_bufs[bufnr] then
               pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
             end
           end
