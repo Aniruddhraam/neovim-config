@@ -2492,6 +2492,11 @@ vim.keymap.set('n', '<M-S-u>', '<cmd>nohlsearch<CR>', { noremap = true, silent =
 -- Backspace with Alt+b
 vim.keymap.set({ 'i', 'c' }, '<M-b>', '<BS>', { noremap = true, silent = true, desc = "Backspace" })
 
+-- Single Normal Command from Insert (Alt+o)
+vim.keymap.set('i', '<M-o>', '<C-o>', { noremap = true, silent = true, desc = "Execute single Normal command from Insert" })
+vim.keymap.set('i', '<M-O>', '<C-o>', { noremap = true, silent = true, desc = "Execute single Normal command from Insert" })
+vim.keymap.set('i', '<M-S-o>', '<C-o>', { noremap = true, silent = true, desc = "Execute single Normal command from Insert" })
+
 -- Insert Mode Directional Navigation (Alt + h/j/k/l)
 vim.keymap.set('i', '<M-h>', '<Left>',  { noremap = true, silent = true, desc = "Move Left (Insert)" })
 vim.keymap.set('i', '<M-j>', '<Down>',  { noremap = true, silent = true, desc = "Move Down (Insert)" })
