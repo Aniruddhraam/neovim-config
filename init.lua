@@ -2713,48 +2713,6 @@ function _lazygit_toggle()
 end
 vim.keymap.set('n', '<leader>gg', '<cmd>lua _lazygit_toggle()<CR>', { noremap = true, silent = true, desc = "Toggle Lazygit" })
 
--- In-Terminal Browser (Browsh with TrueColor support for WezTerm / Kitty / Ghostty)
-local browsh_cmd = vim.fn.executable("browsh") == 1 and "browsh" or (vim.fn.executable("browsh.exe") == 1 and "browsh.exe" or "browsh")
-local _browser_instance = nil
-function _G.Toggle_Browser()
-  local status_ok, tt_api = pcall(require, "toggleterm.terminal")
-  if not status_ok then return end
-  if vim.fn.executable(browsh_cmd) ~= 1 then
-    local is_windows = vim.fn.has("win32") == 1
-    local hint = is_windows
-      and "Browsh not found. Install via: 'scoop install browsh' or 'winget install browsh' (and ensure Firefox is installed)."
-      or "Browsh not found. Install via package manager / AUR / brew: 'brew install browsh' (and ensure Firefox is installed)."
-    vim.notify(hint, vim.log.levels.WARN, { title = "Browser (Browsh)" })
-  end
-  if not _browser_instance then
-    _browser_instance = tt_api.Terminal:new({
-      cmd = browsh_cmd,
-      hidden = true,
-      direction = "float",
-      float_opts = {
-        border = "curved",
-        width = function() return math.floor(vim.o.columns * 0.96) end,
-        height = function() return math.floor(vim.o.lines * 0.94) end,
-        winblend = 0,
-      },
-      env = {
-        COLORTERM = "truecolor",
-        TERM = (vim.env.TERM and vim.env.TERM ~= "" and vim.env.TERM) or "xterm-256color",
-      },
-      on_open = function(term)
-        vim.cmd("startinsert!")
-        -- Pressing <leader>b inside browser terminal minimizes/hides it back to editor
-        vim.keymap.set('t', '<leader>b', function()
-          term:toggle()
-        end, { buffer = term.bufnr, noremap = true, silent = true, desc = "Hide Browser" })
-      end,
-    })
-  end
-  _browser_instance:toggle()
-end
-
-vim.keymap.set({ 'n', 't' }, '<leader>b', '<cmd>lua _G.Toggle_Browser()<CR>', { noremap = true, silent = true, desc = "Toggle In-Terminal Browser (Browsh)" })
-
 local function get_terms()
   local status_ok, tt_api = pcall(require, "toggleterm.terminal")
   if not status_ok then return {} end
