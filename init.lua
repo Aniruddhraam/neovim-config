@@ -649,12 +649,19 @@ require("lazy").setup({
         -- Try LSP first, fall back to treesitter (covers markdown, etc.)
         backends = { "lsp", "treesitter" },
         layout = {
-          max_width = { 40, 0.2 },
-          min_width = 25,
+          max_width = { 35, 0.25 },
+          width = 35,
+          min_width = 30,
           default_direction = "right",
           placement = "edge",
-          preserve_equality = true,
+          preserve_equality = false,
+          resize_to_content = false,
         },
+        on_attach = function(bufnr)
+          if _G.Fix_Sidebar_Widths then
+            vim.schedule(_G.Fix_Sidebar_Widths)
+          end
+        end,
         open_automatic = function(bufnr)
           if _G._aerial_user_closed then return false end
           local ft = vim.bo[bufnr].filetype
@@ -672,6 +679,7 @@ require("lazy").setup({
               local aerial = require("aerial")
               if not aerial.is_open({ bufnr = bufnr }) then
                 pcall(aerial.open, { bufnr = bufnr, focus = false })
+                if _G.Fix_Sidebar_Widths then vim.schedule(_G.Fix_Sidebar_Widths) end
               end
             end
           end
@@ -935,7 +943,26 @@ require("lazy").setup({
           vim.keymap.set("n", "d", nvim_tree_async_remove, { buffer = bufnr, noremap = true, silent = true, desc = "Async Delete (Background)" })
           vim.keymap.set("n", "D", nvim_tree_async_remove, { buffer = bufnr, noremap = true, silent = true, desc = "Async Delete (Background)" })
         end,
-        view = { width = 35, side = "left" },
+        view = {
+          width = 35,
+          side = "left",
+          preserve_window_proportions = true,
+        },
+        actions = {
+          open_file = {
+            quit_on_open = false,
+            resize_window = false,
+            window_picker = {
+              enable = true,
+              picker = "default",
+              chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+              exclude = {
+                filetype = { "notify", "lazy", "mason", "qf", "diff", "fugitive", "fugitiveblame", "aerial", "NvimTree", "toggleterm", "trouble", "alpha" },
+                buftype = { "nofile", "terminal", "help", "quickfix" },
+              },
+            },
+          },
+        },
         filesystem_watchers = {
           enable = true,
           debounce_delay = 150,
@@ -1818,20 +1845,38 @@ require("lazy").setup({
     end,
   },
 
-  -- Inline Image Viewer (Kitty Graphics Protocol)
+  -- Inline & Buffer Image Viewer (Kitty Graphics Protocol)
   {
     "3rd/image.nvim",
-    event = "VeryLazy",
+    lazy = false,
+    priority = 1000,
     config = function()
       require("image").setup({
         backend = "kitty",
         processor = "magick_cli",
         max_width_window_percentage = 90,
         max_height_window_percentage = 80,
-        window_overlap_clear_enabled = true,
-        window_overlap_clear_ft_ignore = { "blink-cmp-menu", "blink-cmp-documentation", "aerial", "NvimTree", "" },
+        window_overlap_clear_enabled = false,
+        editor_only_render_when_focused = false,
+        tmux_show_only_in_active_window = false,
         ignore_download_error = true,
         hijack_file_patterns = { "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.bmp", "*.tiff", "*.ico", "*.svg" },
+      })
+
+      -- Keymaps for image buffers
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "image_nvim",
+        callback = function(args)
+          vim.keymap.set("n", "q", "<cmd>bdelete!<CR>", { buffer = args.buf, silent = true, desc = "Close Image" })
+          vim.keymap.set("n", "o", function()
+            local path = vim.api.nvim_buf_get_name(args.buf)
+            if path ~= "" then
+              if vim.fn.has("mac") == 1 then vim.fn.jobstart({ "open", path }, { detach = true })
+              elseif vim.fn.has("unix") == 1 then vim.fn.jobstart({ "xdg-open", path }, { detach = true })
+              elseif vim.fn.has("win32") == 1 then vim.fn.jobstart({ "cmd", "/c", "start", '""', path }, { detach = true }) end
+            end
+          end, { buffer = args.buf, silent = true, desc = "Open in OS Viewer" })
+        end,
       })
     end,
   },
@@ -2251,6 +2296,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
 -- 4. CORE EDITOR SETTINGS
 -- =========================================================================
 vim.opt.termguicolors = true
+vim.opt.equalalways = false
 vim.opt.number = true        
 vim.opt.relativenumber = true 
 vim.opt.signcolumn = "yes"   
@@ -2337,6 +2383,44 @@ vim.api.nvim_create_autocmd("CursorHold", {
         scope = "line",
       })
     end
+  end,
+})
+
+-- Maintain consistent sidebar widths across window splits and terminal resizes
+local function fix_sidebar_widths()
+  local tree_win = nil
+  local aerial_win = nil
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) then
+      local cfg = vim.api.nvim_win_get_config(win)
+      if cfg.relative == "" then
+        local buf = vim.api.nvim_win_get_buf(win)
+        local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
+        if ft == "NvimTree" then
+          tree_win = win
+        elseif ft == "aerial" then
+          aerial_win = win
+        end
+      end
+    end
+  end
+
+  if tree_win and vim.api.nvim_win_is_valid(tree_win) then
+    pcall(vim.api.nvim_win_set_width, tree_win, 35)
+    pcall(vim.api.nvim_set_option_value, "winfixwidth", true, { win = tree_win })
+  end
+  if aerial_win and vim.api.nvim_win_is_valid(aerial_win) then
+    pcall(vim.api.nvim_win_set_width, aerial_win, 35)
+    pcall(vim.api.nvim_set_option_value, "winfixwidth", true, { win = aerial_win })
+  end
+end
+
+_G.Fix_Sidebar_Widths = fix_sidebar_widths
+
+vim.api.nvim_create_autocmd({ "VimResized" }, {
+  desc = "Preserve fixed sidebar width ratio for NvimTree and Aerial",
+  callback = function()
+    vim.schedule(fix_sidebar_widths)
   end,
 })
 
@@ -2712,6 +2796,7 @@ vim.keymap.set("n", "<leader>a", function()
     -- User is manually opening — clear the global flag
     _G._aerial_user_closed = false
     aerial.open({ focus = false })
+    if _G.Fix_Sidebar_Widths then vim.schedule(_G.Fix_Sidebar_Widths) end
   end
 end, { noremap = true, silent = true, desc = "Toggle Code Structure Sidebar" })
 
