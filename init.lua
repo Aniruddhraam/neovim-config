@@ -1,7 +1,43 @@
+-- Pause Lua Garbage Collector during startup to eliminate GC sweeps while loading modules
+if collectgarbage then
+  collectgarbage("stop")
+end
+
 -- Enable Neovim Lua bytecode caching for 30-50% faster startup
 if vim.loader then
   vim.loader.enable()
 end
+
+-- Resume GC once the editor finishes loading lazy plugins
+vim.api.nvim_create_autocmd("User", {
+  pattern = "VeryLazy",
+  once = true,
+  callback = function()
+    if collectgarbage then
+      collectgarbage("restart")
+    end
+  end,
+})
+
+-- Disable unused built-in legacy Vimscript plugins for faster startup
+vim.g.loaded_gzip = 1
+vim.g.loaded_zip = 1
+vim.g.loaded_zipPlugin = 1
+vim.g.loaded_tar = 1
+vim.g.loaded_tarPlugin = 1
+vim.g.loaded_getscript = 1
+vim.g.loaded_getscriptPlugin = 1
+vim.g.loaded_vimball = 1
+vim.g.loaded_vimballPlugin = 1
+vim.g.loaded_2html_plugin = 1
+vim.g.loaded_tohtml = 1
+vim.g.loaded_tutor_mode_plugin = 1
+vim.g.loaded_netrw = 1
+vim.g.loaded_netrwPlugin = 1
+vim.g.loaded_netrwSettings = 1
+vim.g.loaded_netrwFileHandlers = 1
+vim.g.loaded_matchit = 1
+vim.g.loaded_matchparen = 1
 
 -- Ensure ~/.local/bin and ~/go/bin are in PATH across all operating systems (Linux, macOS, Windows)
 local is_win = vim.fn.has("win32") == 1
@@ -139,17 +175,16 @@ require("lazy").setup({
           hl.AerialNormalNC = { bg = "NONE" }
           hl.AerialLine = { bg = "#1f2335" }
 
-          hl.TelescopeNormal = { bg = "NONE" }
-          hl.TelescopeBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
-          hl.TelescopePromptNormal = { bg = "NONE" }
-          hl.TelescopePromptBorder = { fg = c.cyan, bg = "NONE" }
-          hl.TelescopePromptTitle = { fg = c.cyan, bg = "NONE", bold = true }
-          hl.TelescopeResultsNormal = { bg = "NONE" }
-          hl.TelescopeResultsBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
-          hl.TelescopeResultsTitle = { fg = c.magenta, bg = "NONE", bold = true }
-          hl.TelescopePreviewNormal = { bg = "NONE" }
-          hl.TelescopePreviewBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
-          hl.TelescopePreviewTitle = { fg = c.blue, bg = "NONE", bold = true }
+          hl.FzfLuaNormal = { bg = "NONE" }
+          hl.FzfLuaBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.FzfLuaTitle = { fg = c.blue, bg = "NONE", bold = true }
+          hl.FzfLuaBackdrop = { bg = "NONE" }
+          hl.FzfLuaPreviewNormal = { bg = "NONE" }
+          hl.FzfLuaPreviewBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.FzfLuaPreviewTitle = { fg = c.magenta, bg = "NONE", bold = true }
+          hl.FzfLuaCursor = { fg = c.bg, bg = c.fg }
+          hl.FzfLuaCursorLine = { bg = "#283457" }
+          hl.FzfLuaSearch = { fg = c.blue, bg = "NONE", bold = true }
 
           hl.BlinkCmpMenu = { bg = "NONE" }
           hl.BlinkCmpMenuBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
@@ -210,20 +245,59 @@ require("lazy").setup({
           opts = { position = "center", hl = "Keyword" }
       }
 
-      -- Custom function to bypass find_files and jump straight into NvimTree
+      -- Custom function to search saved projects / sessions and jump straight into NvimTree
       _G.Open_Project_In_Tree = function()
-        local status_ok, telescope = pcall(require, "telescope")
+        local status_ok, fzf = pcall(require, "fzf-lua")
         if not status_ok then return end
-        telescope.extensions.projects.projects({
-          attach_mappings = function(prompt_bufnr, map)
-            local action_state = require("telescope.actions.state")
-            local actions = require("telescope.actions")
-            local open_tree = function()
-              local selection = action_state.get_selected_entry()
-              if not selection then return end
-              actions.close(prompt_bufnr)
-              local dir = selection.value
-              if dir then
+        local projects_set = {}
+        local projects = {}
+
+        local function add_project(dir)
+          if dir and dir ~= "" and not projects_set[dir] and vim.fn.isdirectory(dir) == 1 then
+            projects_set[dir] = true
+            table.insert(projects, dir)
+          end
+        end
+
+        -- 1. Get from project_nvim history
+        local p_ok, p_history = pcall(require, "project_nvim.utils.history")
+        if p_ok and p_history.get_recent_projects then
+          for _, p in ipairs(p_history.get_recent_projects()) do add_project(p) end
+        else
+          local h_file = vim.fn.stdpath("data") .. "/project_nvim/project_history"
+          if vim.fn.filereadable(h_file) == 1 then
+            local f = io.open(h_file, "r")
+            if f then
+              for line in f:lines() do add_project(vim.trim(line)) end
+              f:close()
+            end
+          end
+        end
+
+        -- 2. Get from auto-session saved sessions
+        local as_ok, auto_session = pcall(require, "auto-session")
+        if as_ok then
+          local root_dir = auto_session.get_root_dir()
+          local session_files = vim.fn.glob(root_dir .. "*.vim", false, true)
+          for _, s_file in ipairs(session_files) do
+            local fname = vim.fn.fnamemodify(s_file, ":t:r")
+            local decoded = fname:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+            add_project(decoded)
+          end
+        end
+
+        if #projects == 0 then
+          vim.notify("No recent projects found", vim.log.levels.INFO, { title = "Projects" })
+          return
+        end
+
+        fzf.fzf_exec(projects, {
+          prompt = "Projects> ",
+          actions = {
+            ["default"] = function(selected)
+              if not selected or #selected == 0 then return end
+              local dir = selected[1]
+              if dir and dir ~= "" then
                 _G._project_root = dir
                 vim.cmd("cd " .. vim.fn.fnameescape(dir))
                 vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
@@ -231,20 +305,65 @@ require("lazy").setup({
                 vim.api.nvim_set_current_buf(scratch_buf)
               end
             end
-            map("i", "<CR>", open_tree)
-            map("n", "<CR>", open_tree)
-            return true
-          end
+          }
         })
       end
 
-      -- Added the "e" shortcut below
+      -- Restore saved active session with full tab/buffer layout
+      _G.Search_Sessions = function()
+        local status_ok, as = pcall(require, "auto-session")
+        if not status_ok then return end
+        local s_ok, as_picker = pcall(require, "auto-session.pickers.fzf")
+        if s_ok and as_picker.open_session_picker and as_picker.is_available() then
+          as_picker.open_session_picker()
+        else
+          vim.cmd("AutoSession search")
+        end
+      end
+
+      -- Directory browser using fzf-lua (searches from user home / root directory across all OSes)
+      _G.Fzf_Browse_Dirs = function()
+        local status_ok, fzf = pcall(require, "fzf-lua")
+        if not status_ok then return end
+        local root_dir = vim.fn.expand("~")
+        local fd_cmd = string.format(
+          'fd --color=never --type d --max-depth 5 --hidden --exclude .git --exclude node_modules --exclude .venv --exclude target --exclude .cache --exclude .local --exclude .cargo --exclude .rustup --exclude AppData . "%s"',
+          root_dir
+        )
+
+        local function open_project_root(selected)
+          if not selected or #selected == 0 then return end
+          local dir = selected[1]
+          if not dir or dir == "" then return end
+          dir = vim.fn.expand(dir)
+          if vim.fn.isdirectory(dir) == 1 then
+            vim.v.this_session = ""
+            _G._project_root = dir
+            vim.cmd("cd " .. vim.fn.fnameescape(dir))
+            vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
+            local scratch_buf = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_set_current_buf(scratch_buf)
+          end
+        end
+
+        fzf.fzf_exec(fd_cmd, {
+          prompt = "Browse Directories (Root)> ",
+          cwd = root_dir,
+          actions = {
+            ["default"] = open_project_root,
+            ["ctrl-o"] = open_project_root,
+            ["ctrl-e"] = open_project_root,
+          },
+        })
+      end
+
+      -- Dashboard buttons
       dashboard.section.buttons.val = {
-          dashboard.button("f", "  Find file", ":Telescope find_files <CR>"),
-          dashboard.button("d", "󰉖  Browse Dirs", ":Telescope file_browser<CR>"),
+          dashboard.button("f", "  Find file", "<cmd>FzfLua files<CR>"),
+          dashboard.button("d", "󰉖  Browse Dirs", "<cmd>lua _G.Fzf_Browse_Dirs()<CR>"),
           dashboard.button("e", "󰙅  Open Project in Tree", "<cmd>lua _G.Open_Project_In_Tree()<CR>"),
-          dashboard.button("r", "  Recent files", ":Telescope oldfiles <CR>"),
-          dashboard.button("p", "󰏋  Active Projects (Restore Tabs)", ":AutoSession search<CR>"),
+          dashboard.button("r", "  Recent files", "<cmd>FzfLua oldfiles<CR>"),
+          dashboard.button("p", "󰏋  Active Projects (Restore Tabs)", "<cmd>lua _G.Search_Sessions()<CR>"),
           dashboard.button("q", "󰅙  Quit NVIM", ":qa<CR>"),
       }
 
@@ -575,28 +694,22 @@ require("lazy").setup({
     end
   },
 
-  -- Ultimate Searching & Fuzzy Finding (Telescope)
+  -- Lightning Fast Fuzzy Finder (fzf-lua: Go fzf IPC, zero Lua table overhead)
   {
-    "nvim-telescope/telescope.nvim",
-    branch = "master", -- Force master branch to fix 'Invalid buffer id' crash
+    "ibhagwan/fzf-lua",
     event = "VeryLazy",
-    cmd = "Telescope",
-    dependencies = { 
-        "nvim-lua/plenary.nvim", 
-        "nvim-tree/nvim-web-devicons",
-        "nvim-telescope/telescope-file-browser.nvim",
-        { "nvim-telescope/telescope-fzf-native.nvim", build = "cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release" }
-    },
+    cmd = "FzfLua",
+    dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
-      local actions = require("telescope.actions")
-      local action_state = require("telescope.actions.state")
+      local fzf = require("fzf-lua")
+      local path = require("fzf-lua.path")
 
       -- Universal function to open a highlighted item's directory in NvimTree
-      local open_in_tree = function(prompt_bufnr)
-        local selection = action_state.get_selected_entry()
-        if not selection then return end
-        actions.close(prompt_bufnr)
-        local dir = selection.path or selection.value or selection.cwd or vim.fn.getcwd()
+      local open_in_tree = function(selected)
+        if not selected or #selected == 0 then return end
+        local entry = selected[1]
+        local file_path = path.entry_to_file(entry).path
+        local dir = file_path
         if vim.fn.isdirectory(dir) == 0 then
           dir = vim.fn.fnamemodify(dir, ":h")
         end
@@ -604,78 +717,60 @@ require("lazy").setup({
         vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
       end
 
-      -- File Size Cap to prevent previewer crashes on giant/minified files
-      local previewers = require("telescope.previewers")
-      local new_maker = function(filepath, bufnr, opts)
-        opts = opts or {}
-        filepath = vim.fn.expand(filepath)
-        
-        vim.uv.fs_stat(filepath, function(_, stat)
-          if not stat then return end
-          
-          vim.schedule(function()
-            if not vim.api.nvim_buf_is_valid(bufnr) then return end
-            
-            if stat.size > 100000 then -- 100KB Limit
-              vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "FILE TOO LARGE TO PREVIEW" })
-            else
-              previewers.buffer_previewer_maker(filepath, bufnr, opts)
-            end
-          end)
-        end)
-      end
-
-      require("telescope").setup({
-        defaults = {
-          vimgrep_arguments = {
-            "rg",
-            "--color=never",
-            "--no-heading",
-            "--with-filename",
-            "--line-number",
-            "--column",
-            "--smart-case"
+      fzf.setup({
+        winopts = {
+          border = "rounded",
+          preview = {
+            border = "rounded",
+            layout = "flex",
+            horizontal = "right:50%",
           },
-          borderchars = { "─", "│", "─", "│", "╭", "╮", "╯", "╰" },
-          buffer_previewer_maker = new_maker,
-          file_ignore_patterns = { ".git/", "node_modules/", "__pycache__/", ".venv/", "target/" },
-          layout_config = { prompt_position = "top" },
-          sorting_strategy = "ascending",
-          mappings = {
-            i = {
-              ["<C-e>"] = open_in_tree, -- Press Ctrl+e in any telescope window to jump to the tree
-              ["<Esc>"] = actions.close,
-              ["<M-u>"] = actions.close,
-              ["<M-j>"] = actions.move_selection_next,
-              ["<M-k>"] = actions.move_selection_previous,
-            },
-            n = {
-              ["<C-e>"] = open_in_tree,
-              ["<Esc>"] = actions.close,
-              ["<M-u>"] = actions.close,
-              ["<M-j>"] = actions.move_selection_next,
-              ["<M-k>"] = actions.move_selection_previous,
-            }
-          }
         },
-        pickers = {
-          find_files = {
-            find_command = { "fd", "--type", "f", "--strip-cwd-prefix" }
-          }
-        },
-        extensions = {
-          file_browser = { theme = "ivy", hijack_netrw = true },
+        keymap = {
+          builtin = {
+            ["<Esc>"] = "hide",
+            ["<M-u>"] = "hide",
+            ["<M-U>"] = "hide",
+            ["<M-j>"] = "down",
+            ["<M-k>"] = "up",
+            ["<M-h>"] = "preview-down",
+            ["<M-l>"] = "preview-up",
+          },
           fzf = {
-            fuzzy = true,
-            override_generic_sorter = true,
-            override_file_sorter = true,
-            case_mode = "smart_case",
+            ["alt-j"] = "down",
+            ["alt-k"] = "up",
+            ["alt-h"] = "backward-char",
+            ["alt-l"] = "forward-char",
+            ["alt-w"] = "forward-word",
+            ["alt-b"] = "backward-word",
+            ["alt-u"] = "abort",
+            ["alt-U"] = "abort",
+            ["ctrl-j"] = "down",
+            ["ctrl-k"] = "up",
+            ["ctrl-e"] = "accept",
+            ["ctrl-u"] = "unix-line-discard",
+            ["esc"] = "abort",
           },
-        }
+        },
+        actions = {
+          files = {
+            ["ctrl-e"] = open_in_tree,
+          },
+        },
+        files = {
+          fd_opts = "--color=never --type f --hidden --follow --exclude .git --exclude node_modules --exclude .venv --exclude target",
+        },
+        grep = {
+          rg_opts = "--column --line-number --no-heading --color=always --smart-case --max-columns=4096 -e",
+        },
+        fzf_opts = {
+          ["--layout"] = "reverse",
+          ["--marker"] = "●",
+          ["--bind"] = "alt-j:down,alt-k:up,alt-h:backward-char,alt-l:forward-char,alt-u:abort,alt-w:forward-word,alt-b:backward-word,ctrl-j:down,ctrl-k:up",
+        },
       })
-      require("telescope").load_extension("projects")
-      require("telescope").load_extension("file_browser") 
-      pcall(require("telescope").load_extension, "fzf")
+
+      fzf.register_ui_select()
     end,
   },
 
@@ -1774,7 +1869,7 @@ require("lazy").setup({
           i = { ["<Esc>"] = "Close", ["<CR>"] = "Confirm", ["<Up>"] = "HistoryPrev", ["<Down>"] = "HistoryNext" },
         }
       },
-      select = { backend = { "telescope", "builtin" }, builtin = { border = "rounded" } },
+      select = { backend = { "fzf_lua", "builtin" }, builtin = { border = "rounded" } },
     },
   },
 
@@ -1892,11 +1987,15 @@ require("lazy").setup({
 -- 3. LSP CONFIGURATION 
 -- =========================================================================
 
-local capabilities = vim.lsp.protocol.make_client_capabilities()
-local has_blink, blink = pcall(require, "blink.cmp")
-if has_blink then
-  capabilities = blink.get_lsp_capabilities(capabilities)
-end
+-- Defer resolving Blink capabilities until an LSP client starts to avoid eager plugin loading on startup
+local capabilities = setmetatable({}, {
+  __index = function(_, key)
+    local base = vim.lsp.protocol.make_client_capabilities()
+    local ok, blink = pcall(require, "blink.cmp")
+    local caps = ok and blink.get_lsp_capabilities(base) or base
+    return caps[key]
+  end,
+})
 
 vim.lsp.config("*", { capabilities = capabilities })
 
@@ -2106,15 +2205,15 @@ vim.api.nvim_create_autocmd("LspAttach", {
     vim.keymap.set("n", "<C-]>", vim.lsp.buf.definition, { buffer = bufnr, silent = true, desc = "LSP Go to Definition" })
 
     local function show_references()
-      local ok, builtin = pcall(require, "telescope.builtin")
+      local ok, fzf = pcall(require, "fzf-lua")
       if ok then
-        builtin.lsp_references({ show_line = true })
+        fzf.lsp_references()
       else
         vim.lsp.buf.references()
       end
     end
 
-    vim.keymap.set("n", "gr", show_references, { buffer = bufnr, silent = true, desc = "LSP Go to References (Telescope)" })
+    vim.keymap.set("n", "gr", show_references, { buffer = bufnr, silent = true, desc = "LSP Go to References (fzf-lua)" })
     vim.keymap.set("n", "gh", vim.lsp.buf.hover, { buffer = bufnr, silent = true, desc = "LSP Hover Documentation" })
     vim.keymap.set("n", "<leader>k", vim.lsp.buf.hover, { buffer = bufnr, silent = true, desc = "LSP Hover Documentation" })
     vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, { buffer = bufnr, silent = true, desc = "Code Action" })
@@ -2438,12 +2537,12 @@ end
 -- 5. CUSTOM KEYBINDINGS & COMMANDS
 -- =========================================================================
 
--- Utility Command: Clear Telescope Project History
+-- Utility Command: Clear Project History
 vim.api.nvim_create_user_command("ClearProjects", function()
   local history_file = vim.fn.stdpath("data") .. "/project_nvim/project_history"
   os.remove(history_file)
   print("Project history cleared. (Restart Neovim to reflect changes)")
-end, { desc = "Wipe the recent projects list from Telescope" })
+end, { desc = "Wipe the recent projects list" })
 
 -- Utility Command: Asynchronously delete file or folder in background (:AsyncDelete [path])
 vim.api.nvim_create_user_command("AsyncDelete", function(opts)
@@ -2493,39 +2592,13 @@ vim.keymap.set('v', '/', '/\\V', { noremap = true, desc = "Literal Search Forwar
 vim.keymap.set('n', '?', '?\\V', { noremap = true, desc = "Literal Search Backward" })
 vim.keymap.set('v', '?', '?\\V', { noremap = true, desc = "Literal Search Backward" })
 
--- Telescope File Finders
-vim.keymap.set('n', '<C-f>', function() require('telescope.builtin').current_buffer_fuzzy_find() end, { noremap = true, silent = true, desc = "Fuzzy Find in File" })
-vim.keymap.set('n', '<leader>f', function() require('telescope.builtin').find_files() end, { noremap = true, silent = true, desc = "Find Files" })
-vim.keymap.set('n', '<leader>F', function() require('telescope.builtin').live_grep() end, { noremap = true, silent = true, desc = "Find Text" })
-vim.keymap.set('n', '<leader>fb', function()
-  require('telescope').extensions.file_browser.file_browser({
-    attach_mappings = function(prompt_bufnr, map)
-      local actions = require("telescope.actions")
-      local action_state = require("telescope.actions.state")
-
-      -- Ctrl+o: Open the CURRENT browsed directory as the project root
-      local open_as_project = function()
-        local finder = action_state.get_current_picker(prompt_bufnr).finder
-        local dir = finder.path
-        if not dir then return end
-        actions.close(prompt_bufnr)
-        
-        -- Detach from current session to prevent overwriting it
-        vim.v.this_session = ""
-        
-        _G._project_root = dir
-        vim.cmd("cd " .. vim.fn.fnameescape(dir))
-        vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
-        local scratch_buf = vim.api.nvim_create_buf(false, true)
-        vim.api.nvim_set_current_buf(scratch_buf)
-      end
-
-      map("i", "<C-o>", open_as_project)
-      map("n", "<C-o>", open_as_project)
-      return true -- keep all default mappings
-    end,
-  })
-end, { noremap = true, silent = true, desc = "Directory Browser (Ctrl+o to open as project)" })
+-- fzf-lua File Finders & Grep
+vim.keymap.set('n', '<C-f>', function() require('fzf-lua').blines() end, { noremap = true, silent = true, desc = "Fuzzy Find in File (fzf-lua)" })
+vim.keymap.set('n', '<leader>f', function() require('fzf-lua').files() end, { noremap = true, silent = true, desc = "Find Files (fzf-lua)" })
+vim.keymap.set('n', '<leader>F', function() require('fzf-lua').live_grep() end, { noremap = true, silent = true, desc = "Find Text (fzf-lua)" })
+vim.keymap.set('n', '<leader>d', function() _G.Fzf_Browse_Dirs() end, { noremap = true, silent = true, desc = "Browse Directories (Root)" })
+vim.keymap.set('n', '<leader>fd', function() _G.Fzf_Browse_Dirs() end, { noremap = true, silent = true, desc = "Browse Directories (Root)" })
+vim.keymap.set('n', '<leader>fb', function() _G.Fzf_Browse_Dirs() end, { noremap = true, silent = true, desc = "Browse Directories (Root)" })
 
 -- =========================================================================
 -- DEBUGGING KEYMAPS (DAP / Delve)
@@ -2585,8 +2658,8 @@ vim.keymap.set({ 'n', 'v' }, '<leader>de', function() require('dapui').eval() en
 -- =========================================================================
 -- THE NEW PROJECT / SESSION WORKFLOW
 -- =========================================================================
-vim.keymap.set('n', '<leader>p', ':AutoSession search<CR>', { noremap = true, silent = true, desc = "Active Projects (Restore Tabs)" })
-vim.keymap.set('n', '<leader>fp', ':Telescope projects<CR>', { noremap = true, silent = true, desc = "Find New Project Folders" })
+vim.keymap.set('n', '<leader>p', function() _G.Search_Sessions() end, { noremap = true, silent = true, desc = "Active Projects (Restore Tabs)" })
+vim.keymap.set('n', '<leader>fp', function() _G.Open_Project_In_Tree() end, { noremap = true, silent = true, desc = "Find Recent Project Folders" })
 
 -- THE SIDEBAR (Aerial Code Outline)
 vim.keymap.set("n", "<leader>a", function()
