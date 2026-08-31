@@ -245,6 +245,48 @@ require("lazy").setup({
           opts = { position = "center", hl = "Keyword" }
       }
 
+      -- Universal project open helper: cleanly opens project in NvimTree and focuses code window
+      _G.Open_Project_Directory = function(dir)
+        if not dir or dir == "" then return end
+        dir = vim.fn.expand(dir)
+        if vim.fn.isdirectory(dir) ~= 1 then
+          dir = vim.fn.fnamemodify(dir, ":h")
+        end
+        if vim.fn.isdirectory(dir) ~= 1 then return end
+
+        vim.v.this_session = ""
+        _G._project_root = dir
+        vim.cmd("cd " .. vim.fn.fnameescape(dir))
+
+        -- 1. Open and update NvimTree root without focusing it
+        local ok, tree_api = pcall(require, "nvim-tree.api")
+        if ok then
+          tree_api.tree.open({ path = dir, focus = false })
+          pcall(tree_api.tree.change_root, dir)
+          pcall(tree_api.tree.reload)
+        else
+          vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
+        end
+
+        -- 2. Focus the main code window and initialize a fresh buffer (replacing alpha dashboard if open)
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local buf = vim.api.nvim_win_get_buf(win)
+            local ft = vim.bo[buf].filetype
+            local cfg = vim.api.nvim_win_get_config(win)
+            if cfg.relative == "" and ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" then
+              vim.api.nvim_set_current_win(win)
+              if ft == "alpha" then
+                local scratch = vim.api.nvim_create_buf(true, false)
+                vim.api.nvim_win_set_buf(win, scratch)
+                pcall(vim.api.nvim_buf_delete, buf, { force = true })
+              end
+              break
+            end
+          end
+        end
+      end
+
       -- Custom function to search saved projects / sessions and jump straight into NvimTree
       _G.Open_Project_In_Tree = function()
         local status_ok, fzf = pcall(require, "fzf-lua")
@@ -295,15 +337,7 @@ require("lazy").setup({
           prompt = "Projects> ",
           actions = {
             ["default"] = function(selected)
-              if not selected or #selected == 0 then return end
-              local dir = selected[1]
-              if dir and dir ~= "" then
-                _G._project_root = dir
-                vim.cmd("cd " .. vim.fn.fnameescape(dir))
-                vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
-                local scratch_buf = vim.api.nvim_create_buf(false, true)
-                vim.api.nvim_set_current_buf(scratch_buf)
-              end
+              if selected and selected[1] then _G.Open_Project_Directory(selected[1]) end
             end
           }
         })
@@ -331,18 +365,9 @@ require("lazy").setup({
           root_dir
         )
 
-        local function open_project_root(selected)
-          if not selected or #selected == 0 then return end
-          local dir = selected[1]
-          if not dir or dir == "" then return end
-          dir = vim.fn.expand(dir)
-          if vim.fn.isdirectory(dir) == 1 then
-            vim.v.this_session = ""
-            _G._project_root = dir
-            vim.cmd("cd " .. vim.fn.fnameescape(dir))
-            vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
-            local scratch_buf = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_set_current_buf(scratch_buf)
+        local function on_dir_selected(selected)
+          if selected and selected[1] then
+            _G.Open_Project_Directory(selected[1])
           end
         end
 
@@ -350,9 +375,9 @@ require("lazy").setup({
           prompt = "Browse Directories (Root)> ",
           cwd = root_dir,
           actions = {
-            ["default"] = open_project_root,
-            ["ctrl-o"] = open_project_root,
-            ["ctrl-e"] = open_project_root,
+            ["default"] = on_dir_selected,
+            ["ctrl-o"] = on_dir_selected,
+            ["ctrl-e"] = on_dir_selected,
           },
         })
       end
@@ -709,12 +734,13 @@ require("lazy").setup({
         if not selected or #selected == 0 then return end
         local entry = selected[1]
         local file_path = path.entry_to_file(entry).path
-        local dir = file_path
-        if vim.fn.isdirectory(dir) == 0 then
-          dir = vim.fn.fnamemodify(dir, ":h")
+        if _G.Open_Project_Directory then
+          _G.Open_Project_Directory(file_path)
+        else
+          local dir = vim.fn.isdirectory(file_path) == 1 and file_path or vim.fn.fnamemodify(file_path, ":h")
+          vim.cmd("cd " .. vim.fn.fnameescape(dir))
+          vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
         end
-        vim.cmd("cd " .. vim.fn.fnameescape(dir))
-        vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
       end
 
       fzf.setup({
