@@ -37,6 +37,7 @@ vim.g.mapleader = " " -- Sets the leader key to Space
 require("lazy").setup({
   
   -- High Contrast Theme (TokyoNight OLED)
+  -- High Contrast Theme (TokyoNight OLED Transparent)
   {
     "folke/tokyonight.nvim",
     lazy = false,
@@ -46,12 +47,24 @@ require("lazy").setup({
         style = "night",
         transparent = true,
         terminal_colors = true,
+        styles = {
+          comments = { italic = true },
+          keywords = { italic = true },
+          functions = { bold = true },
+          variables = {},
+          sidebars = "transparent", 
+          floats = "transparent",
+        },
         on_colors = function(colors)
           colors.bg = "#000000"
           colors.bg_dark = "#000000"
           colors.bg_float = "#000000"
           colors.bg_sidebar = "#000000"
           colors.bg_statusline = "#000000"
+          colors.bg_popup = "#000000"
+          colors.bg_search = "#3d59a1"
+          colors.bg_visual = "#283457"
+          colors.black = "#000000"
         end,
         on_highlights = function(hl, c)
           hl["@function"] = { fg = c.blue, bold = true }
@@ -88,15 +101,82 @@ require("lazy").setup({
           hl["@operator"] = { fg = c.blue5 }
           hl["@string.escape"] = { fg = c.magenta }
           hl["@variable.member"] = { fg = c.teal }
+
+          -- Full Ghostty Transparency (matching 0.65 opacity) & Pure Black OLED Palette
+          hl.Normal = { bg = "NONE", ctermbg = "NONE" }
+          hl.NormalNC = { bg = "NONE", ctermbg = "NONE" }
+          hl.NormalFloat = { bg = "NONE", ctermbg = "NONE" }
+          hl.FloatBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.FloatTitle = { fg = c.blue, bg = "NONE", bold = true }
+          hl.FloatFooter = { fg = c.dark5 or c.comment, bg = "NONE" }
+
+          hl.SignColumn = { bg = "NONE" }
+          hl.SignColumnSB = { bg = "NONE" }
+          hl.LineNr = { fg = c.dark5 or "#444b6a", bg = "NONE" }
+          hl.CursorLineNr = { fg = c.yellow, bg = "NONE", bold = true }
+          hl.FoldColumn = { bg = "NONE" }
+          hl.Folded = { bg = "NONE", fg = c.comment }
+          hl.EndOfBuffer = { fg = "#000000", bg = "NONE" }
+          hl.MsgArea = { bg = "NONE" }
+
+          hl.WinSeparator = { fg = "#292e42", bg = "NONE" }
+          hl.VertSplit = { fg = "#292e42", bg = "NONE" }
+          hl.WinBar = { bg = "NONE" }
+          hl.WinBarNC = { bg = "NONE" }
+
+          hl.StatusLine = { bg = "NONE" }
+          hl.StatusLineNC = { bg = "NONE" }
+          hl.TabLine = { bg = "NONE" }
+          hl.TabLineFill = { bg = "NONE" }
+          hl.TabLineSel = { bg = "NONE" }
+
+          hl.NvimTreeNormal = { bg = "NONE" }
+          hl.NvimTreeNormalNC = { bg = "NONE" }
+          hl.NvimTreeWinSeparator = { fg = "#292e42", bg = "NONE" }
+          hl.NvimTreeEndOfBuffer = { fg = "NONE", bg = "NONE" }
+
+          hl.AerialNormal = { bg = "NONE" }
+          hl.AerialNormalNC = { bg = "NONE" }
+          hl.AerialLine = { bg = "#1f2335" }
+
+          hl.TelescopeNormal = { bg = "NONE" }
+          hl.TelescopeBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.TelescopePromptNormal = { bg = "NONE" }
+          hl.TelescopePromptBorder = { fg = c.cyan, bg = "NONE" }
+          hl.TelescopePromptTitle = { fg = c.cyan, bg = "NONE", bold = true }
+          hl.TelescopeResultsNormal = { bg = "NONE" }
+          hl.TelescopeResultsBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.TelescopeResultsTitle = { fg = c.magenta, bg = "NONE", bold = true }
+          hl.TelescopePreviewNormal = { bg = "NONE" }
+          hl.TelescopePreviewBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.TelescopePreviewTitle = { fg = c.blue, bg = "NONE", bold = true }
+
+          hl.BlinkCmpMenu = { bg = "NONE" }
+          hl.BlinkCmpMenuBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.BlinkCmpDoc = { bg = "NONE" }
+          hl.BlinkCmpDocBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+          hl.BlinkCmpSignatureHelp = { bg = "NONE" }
+          hl.BlinkCmpSignatureHelpBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+
+          hl.WhichKey = { bg = "NONE" }
+          hl.WhichKeyNormal = { bg = "NONE" }
+          hl.WhichKeyBorder = { fg = c.border_highlight or c.blue, bg = "NONE" }
+
+          hl.NoiceCmdlinePopup = { bg = "NONE" }
+          hl.NoiceCmdlinePopupBorder = { fg = c.blue, bg = "NONE" }
+          hl.NoiceCmdline = { bg = "NONE" }
+          hl.NoicePopup = { bg = "NONE" }
+          hl.NoicePopupBorder = { fg = c.blue, bg = "NONE" }
+
+          hl.Pmenu = { bg = "NONE" }
+          hl.PmenuSel = { bg = "#283457" }
+          hl.PmenuSbar = { bg = "NONE" }
+          hl.PmenuThumb = { bg = "#444b6a" }
+
+          hl.TroubleNormal = { bg = "NONE" }
+          hl.TroubleNormalNC = { bg = "NONE" }
+          hl.NotifyBG = { bg = "NONE" }
         end,
-        styles = {
-          comments = { italic = true },
-          keywords = { italic = true },
-          functions = { bold = true },
-          variables = {},
-          sidebars = "dark", 
-          floats = "dark",
-        },
       })
       vim.cmd[[colorscheme tokyonight]]
     end,
@@ -250,20 +330,20 @@ require("lazy").setup({
                   else
                       if row <= #logo then
                           local target_line = logo[row]
-                          col = col + 3
+                          col = col + 1
                           if col > #target_line then col = #target_line end
                           dashboard.section.header.val[row] = target_line:sub(1, col)
                           needs_redraw = true
                           if col >= #target_line then
                               row, col = row + 1, 1
-                              if row > #logo then pause_ticks = 70 end
+                              if row > #logo then pause_ticks = 60 end
                           end
                       end
                   end
 
                   local current_info = get_datetime()
                   if not info_typed then
-                      info_col = info_col + 2
+                      info_col = info_col + 1
                       if info_col >= #current_info then
                           info_col, info_typed = #current_info, true
                       end
@@ -277,7 +357,7 @@ require("lazy").setup({
                   end
                   
                   if needs_redraw then pcall(vim.cmd.AlphaRedraw) end
-                  vim.defer_fn(draw_frame, 10)
+                  vim.defer_fn(draw_frame, 12)
               end
               draw_frame()
           end,
@@ -775,7 +855,7 @@ require("lazy").setup({
     end,
   },
 
-  -- Visual Tabs
+  -- Visual Tabs (Transparent)
   { 
     "akinsho/bufferline.nvim", 
     event = "VeryLazy",
@@ -788,6 +868,49 @@ require("lazy").setup({
             { filetype = "NvimTree", text = "File Explorer", highlight = "Directory", separator = true },
             { filetype = "aerial", text = "Code Structure", highlight = "Directory", separator = true }
           }
+        },
+        highlights = {
+          fill = { bg = "NONE" },
+          background = { bg = "NONE" },
+          tab = { bg = "NONE" },
+          tab_selected = { bg = "NONE" },
+          tab_close = { bg = "NONE" },
+          close_button = { bg = "NONE" },
+          close_button_visible = { bg = "NONE" },
+          close_button_selected = { bg = "NONE" },
+          buffer_visible = { bg = "NONE" },
+          buffer_selected = { bg = "NONE", bold = true, italic = false },
+          numbers = { bg = "NONE" },
+          numbers_visible = { bg = "NONE" },
+          numbers_selected = { bg = "NONE" },
+          diagnostic = { bg = "NONE" },
+          diagnostic_visible = { bg = "NONE" },
+          diagnostic_selected = { bg = "NONE" },
+          hint = { bg = "NONE" },
+          hint_visible = { bg = "NONE" },
+          hint_selected = { bg = "NONE" },
+          info = { bg = "NONE" },
+          info_visible = { bg = "NONE" },
+          info_selected = { bg = "NONE" },
+          warning = { bg = "NONE" },
+          warning_visible = { bg = "NONE" },
+          warning_selected = { bg = "NONE" },
+          error = { bg = "NONE" },
+          error_visible = { bg = "NONE" },
+          error_selected = { bg = "NONE" },
+          modified = { bg = "NONE" },
+          modified_visible = { bg = "NONE" },
+          modified_selected = { bg = "NONE" },
+          separator = { fg = "#292e42", bg = "NONE" },
+          separator_visible = { fg = "#292e42", bg = "NONE" },
+          separator_selected = { fg = "#292e42", bg = "NONE" },
+          indicator_selected = { bg = "NONE" },
+          indicator_visible = { bg = "NONE" },
+          pick_selected = { bg = "NONE" },
+          pick_visible = { bg = "NONE" },
+          pick = { bg = "NONE" },
+          offset_separator = { fg = "#292e42", bg = "NONE" },
+          trunc_marker = { bg = "NONE" },
         }
       }) 
     end 
@@ -1119,7 +1242,7 @@ require("lazy").setup({
             args = { "--stdin-filepath", "$FILENAME" },
             stdin = true,
           },
-          ruff_format = { prepend_args = { "--config", 'format.indent-style="tab"', "--config", "indent-width=4" } },
+          ruff_format = { prepend_args = { "--config", 'format.indent-style="space"', "--config", "indent-width=4" } },
           ["clang-format"] = { prepend_args = { "-style={UseTab: Always, TabWidth: 4, IndentWidth: 4}" } },
           rustfmt = { prepend_args = { "--config", "hard_tabs=true,tab_spaces=4" } },
         },
@@ -1534,9 +1657,21 @@ require("lazy").setup({
     event = "VeryLazy",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
+      local tokyonight_theme = require("lualine.themes.tokyonight")
+      for _, mode in pairs(tokyonight_theme) do
+        if type(mode) == "table" and mode.c then
+          mode.c.bg = "NONE"
+        end
+      end
+      if tokyonight_theme.inactive then
+        if tokyonight_theme.inactive.a then tokyonight_theme.inactive.a.bg = "NONE" end
+        if tokyonight_theme.inactive.b then tokyonight_theme.inactive.b.bg = "NONE" end
+        if tokyonight_theme.inactive.c then tokyonight_theme.inactive.c.bg = "NONE" end
+      end
+
       require("lualine").setup({
         options = {
-          theme = "tokyonight",
+          theme = tokyonight_theme,
           component_separators = { left = '', right = '' },
           section_separators = { left = '', right = '' },
         }
@@ -1602,14 +1737,28 @@ require("lazy").setup({
   -- AESTHETICS & MOTION UPGRADES
   -- =========================================================================
 
-  -- Smooth Animated Cursor Smear
+  -- Ultra Smooth Animated Cursor Smear (Calibrated for 240Hz High Refresh Display)
   {
     "sphamba/smear-cursor.nvim",
     event = "VeryLazy",
     opts = {
       cursor_color = "#7aa2f7",
-      stiffness = 0.8,
-      trailing_stiffness = 0.5,
+      time_interval = 4, -- ~240 FPS render interval matching 240Hz display
+      stiffness = 0.2, -- Gentle, fluid movement across frames instead of instant snap
+      trailing_stiffness = 0.12, -- Soft lagging tail for a visible smooth glide
+      damping = 0.65, -- Natural physical momentum
+      trailing_exponent = 3,
+      anticipation = 0.1,
+      distance_stop_animating = 0.1,
+      delay_event_to_smear = 0,
+      delay_after_key = 0,
+      color_levels = 32,
+      legacy_computing_symbols_support = true,
+      legacy_computing_symbols_support_vertical_bars = true,
+      use_diagonal_blocks = true,
+      smear_between_neighbor_lines = true,
+      smear_between_buffers = true,
+      scroll_buffer_space = true,
     },
   },
 
@@ -1637,6 +1786,16 @@ require("lazy").setup({
     opts = {
       symbol = "│",
       options = { try_as_border = true },
+      draw = {
+        delay = 50,
+        animation = function(s, n)
+          local ok, mini = pcall(require, "mini.indentscope")
+          if ok and mini.gen_animation then
+            return mini.gen_animation.quadratic({ easing = "out", duration = 120, unit = "step" })(s, n)
+          end
+          return 10
+        end,
+      },
     },
     config = function(_, opts)
       require("mini.indentscope").setup(opts)
@@ -1972,7 +2131,9 @@ vim.opt.relativenumber = true
 vim.opt.signcolumn = "yes"   
 vim.opt.tabstop = 4          
 vim.opt.shiftwidth = 4
-vim.opt.expandtab = false 
+vim.opt.softtabstop = 4
+vim.opt.expandtab = true 
+vim.opt.smarttab = true
 vim.opt.guicursor = "a:blinkon0" 
 vim.opt.confirm = true
 vim.opt.clipboard = "unnamedplus"
@@ -1981,7 +2142,32 @@ vim.opt.selectmode = "key,mouse"
 vim.opt.ignorecase = true  
 vim.opt.smartcase = true   
 vim.opt.updatetime = 300   -- Fast CursorHold trigger for diagnostic popups
+vim.opt.autoread = true
 vim.opt.sessionoptions = { "buffers", "curdir", "folds", "help", "tabpages", "winsize", "winpos", "terminal" } -- Exclude 'blank' to avoid saving empty/untitled placeholder windows
+
+-- Python Indentation (PEP 8: 4-space indent, 4 additional spaces for continuation lines)
+vim.g.python_indent = {
+  open_paren = "shiftwidth()",
+  nested_paren = "shiftwidth()",
+  ["continue"] = "shiftwidth()",
+  closed_paren_align_last_line = false,
+}
+vim.g.pyindent_open_paren = "shiftwidth()"
+vim.g.pyindent_nested_paren = "shiftwidth()"
+vim.g.pyindent_continue = "shiftwidth()"
+
+-- Python FileType configuration: enforce 4-space indentation and prevent mixing tabs and spaces
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "python",
+  desc = "Python indentation and formatting options",
+  callback = function(args)
+    vim.bo[args.buf].expandtab = true
+    vim.bo[args.buf].shiftwidth = 4
+    vim.bo[args.buf].tabstop = 4
+    vim.bo[args.buf].softtabstop = 4
+    vim.bo[args.buf].smartindent = true
+  end,
+})
 
 vim.diagnostic.config({
   float = {
@@ -2025,6 +2211,84 @@ vim.api.nvim_create_autocmd("CursorHold", {
         focus = false,
         scope = "line",
       })
+    end
+  end,
+})
+
+-- =========================================================================
+-- FILE CHANGE & DELETION HANDLER (AutoRead & E211 Prevention)
+-- =========================================================================
+local deleted_buffers_notified = {}
+local external_file_group = vim.api.nvim_create_augroup("ExternalFileWatch", { clear = true })
+
+-- Gracefully handle files modified or deleted on disk while open in Neovim
+vim.api.nvim_create_autocmd("FileChangedShell", {
+  group = external_file_group,
+  pattern = "*",
+  callback = function(args)
+    local bufnr = args.buf
+    local file = args.file
+    local fname = vim.fn.fnamemodify(file, ":t")
+
+    if vim.v.fcs_reason == "deleted" then
+      -- Setting choice to empty string tells Neovim that we handle the event.
+      -- This suppresses the blocking 'E211: File no longer available' error and prevents Lua crashes in BufferLine.
+      vim.v.fcs_choice = ""
+      if not deleted_buffers_notified[bufnr] then
+        deleted_buffers_notified[bufnr] = true
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(bufnr) then
+            vim.notify(
+              string.format("File '%s' was deleted on disk. Buffer kept in memory (use :w to recreate or <leader>w to close).", fname),
+              vim.log.levels.WARN,
+              { title = "File Deleted on Disk" }
+            )
+          end
+        end)
+      end
+    elseif vim.v.fcs_reason == "changed" then
+      vim.v.fcs_choice = "reload"
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(bufnr) then
+          vim.notify(
+            string.format("File '%s' changed on disk. Automatically reloaded.", fname),
+            vim.log.levels.INFO,
+            { title = "File Reloaded" }
+          )
+        end
+      end)
+    elseif vim.v.fcs_reason == "conflict" then
+      vim.v.fcs_choice = "ask"
+    elseif vim.v.fcs_reason == "time" or vim.v.fcs_reason == "mode" then
+      vim.v.fcs_choice = "reload"
+    end
+  end,
+})
+
+-- Reset notification state if the file is written or buffer wiped
+vim.api.nvim_create_autocmd({ "BufWritePost", "BufWipeout", "BufDelete" }, {
+  group = external_file_group,
+  pattern = "*",
+  callback = function(args)
+    deleted_buffers_notified[args.buf] = nil
+  end,
+})
+
+-- Trigger checktime when switching focus or buffers to detect external changes immediately
+vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold" }, {
+  group = external_file_group,
+  pattern = "*",
+  callback = function()
+    local mode = vim.api.nvim_get_mode().mode
+    if mode == "c" then return end
+    local ft = vim.bo.filetype
+    if ft == "" or ft == "NvimTree" or ft == "aerial" or ft == "toggleterm" or ft == "trouble" or ft == "alpha" or ft == "lazy" or ft == "mason" or ft:find("^dap") then
+      return
+    end
+    local buftype = vim.bo.buftype
+    local bufname = vim.api.nvim_buf_get_name(0)
+    if buftype == "" and bufname ~= "" then
+      vim.cmd("checktime")
     end
   end,
 })
@@ -2202,6 +2466,26 @@ vim.api.nvim_create_user_command("AsyncDelete", function(opts)
     end
   end)
 end, { nargs = "?", complete = "file", desc = "Delete file or directory asynchronously in background" })
+
+-- Utility Command: Close all unmodified buffers whose file was deleted on disk (:CleanDeletedBuffers)
+vim.api.nvim_create_user_command("CleanDeletedBuffers", function()
+  local closed = 0
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
+      local name = vim.api.nvim_buf_get_name(bufnr)
+      local buftype = vim.bo[bufnr].buftype
+      if buftype == "" and name ~= "" and vim.fn.filereadable(name) == 0 and not vim.bo[bufnr].modified then
+        pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+        closed = closed + 1
+      end
+    end
+  end
+  if closed > 0 then
+    vim.notify(string.format("Closed %d buffer(s) for deleted files.", closed), vim.log.levels.INFO, { title = "Clean Buffers" })
+  else
+    vim.notify("No deleted file buffers found.", vim.log.levels.INFO, { title = "Clean Buffers" })
+  end
+end, { desc = "Close all unmodified buffers whose underlying file was deleted from disk" })
 
 -- Search Upgrades
 vim.keymap.set('n', '/', '/\\V', { noremap = true, desc = "Literal Search Forward" })
@@ -2435,8 +2719,15 @@ vim.keymap.set({'n', 'i', 'v'}, '<M-e>', function() cycle_panel_focus(false) end
 vim.keymap.set({'n', 'i', 'v'}, '<M-S-e>', function() cycle_panel_focus(true) end, { noremap = true, silent = true, desc = "Cycle Focus Reverse: File -> Tree -> Structure" })
 
 -- Buffer Navigation
-vim.keymap.set('n', '<Tab>', '<cmd>BufferLineCycleNext<CR>', { noremap = true, silent = true, desc = "Next File Tab" })
-vim.keymap.set('n', '<S-Tab>', '<cmd>BufferLineCyclePrev<CR>', { noremap = true, silent = true, desc = "Previous File Tab" })
+vim.keymap.set('n', '<Tab>', function()
+  local ok, _ = pcall(vim.cmd, "BufferLineCycleNext")
+  if not ok then pcall(vim.cmd, "bnext") end
+end, { noremap = true, silent = true, desc = "Next File Tab" })
+
+vim.keymap.set('n', '<S-Tab>', function()
+  local ok, _ = pcall(vim.cmd, "BufferLineCyclePrev")
+  if not ok then pcall(vim.cmd, "bprevious") end
+end, { noremap = true, silent = true, desc = "Previous File Tab" })
 
 -- Window Split Navigation
 vim.keymap.set('n', '<C-h>', '<C-w>h', { noremap = true, silent = true })
@@ -2500,9 +2791,6 @@ vim.keymap.set('n', '<Esc>', smart_escape, { noremap = true, silent = true, desc
 vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-j>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
 vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-J>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
 vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-S-j>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set('n', '<M-j>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search" })
-vim.keymap.set('n', '<M-J>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search" })
-vim.keymap.set('n', '<M-S-j>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search" })
 
 -- Escape with Alt+u
 vim.keymap.set({ 'i', 'n', 'v', 'x', 's', 'c' }, '<M-u>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
@@ -2517,57 +2805,75 @@ vim.keymap.set('i', '<M-o>', '<C-o>', { noremap = true, silent = true, desc = "E
 vim.keymap.set('i', '<M-O>', '<C-o>', { noremap = true, silent = true, desc = "Execute single Normal command from Insert" })
 vim.keymap.set('i', '<M-S-o>', '<C-o>', { noremap = true, silent = true, desc = "Execute single Normal command from Insert" })
 
--- Insert Mode Directional Navigation (Alt + h/j/k/l)
+-- Directional Navigation (Alt + h/j/k/l)
+-- Insert mode: character/line stepping
 vim.keymap.set('i', '<M-h>', '<Left>',  { noremap = true, silent = true, desc = "Move Left (Insert)" })
 vim.keymap.set('i', '<M-j>', '<Down>',  { noremap = true, silent = true, desc = "Move Down (Insert)" })
 vim.keymap.set('i', '<M-k>', '<Up>',    { noremap = true, silent = true, desc = "Move Up (Insert)" })
 vim.keymap.set('i', '<M-l>', '<Right>', { noremap = true, silent = true, desc = "Move Right (Insert)" })
 
--- Home & End Navigation
--- Insert mode: Ctrl+h (Home) / Ctrl+l (End)
+-- Normal mode: directional movement
+vim.keymap.set('n', '<M-h>', 'h', { noremap = true, silent = true, desc = "Move Left (Normal)" })
+vim.keymap.set('n', '<M-j>', 'j', { noremap = true, silent = true, desc = "Move Down (Normal)" })
+vim.keymap.set('n', '<M-k>', 'k', { noremap = true, silent = true, desc = "Move Up (Normal)" })
+vim.keymap.set('n', '<M-l>', 'l', { noremap = true, silent = true, desc = "Move Right (Normal)" })
+
+-- Jump to Start (First Non-Blank / Toggle Col 0) & End of Line (Alt+Shift+h / Alt+Shift+l)
+local function jump_to_line_start_insert()
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local line = vim.api.nvim_get_current_line()
+  local first_non_blank = line:find("%S")
+  local target_col = first_non_blank and (first_non_blank - 1) or 0
+  -- If already behind the first non-blank character, toggle to absolute column 0
+  if col == target_col then
+    vim.api.nvim_win_set_cursor(0, { row, 0 })
+  else
+    vim.api.nvim_win_set_cursor(0, { row, target_col })
+  end
+end
+
+local function jump_to_line_end_insert()
+  local row = vim.api.nvim_win_get_cursor(0)[1]
+  local line = vim.api.nvim_get_current_line()
+  vim.api.nvim_win_set_cursor(0, { row, #line })
+end
+
+-- Insert mode jumps (stays in insert mode)
+vim.keymap.set('i', '<M-S-h>', jump_to_line_start_insert, { noremap = true, silent = true, desc = "Go to First Character / Line Start (Insert)" })
+vim.keymap.set('i', '<M-H>',   jump_to_line_start_insert, { noremap = true, silent = true, desc = "Go to First Character / Line Start (Insert)" })
+vim.keymap.set('i', '<M-S-l>', jump_to_line_end_insert,   { noremap = true, silent = true, desc = "Go to Line End (Insert)" })
+vim.keymap.set('i', '<M-L>',   jump_to_line_end_insert,   { noremap = true, silent = true, desc = "Go to Line End (Insert)" })
+
+-- Normal mode jumps
+vim.keymap.set('n', '<M-S-h>', '^', { noremap = true, silent = true, desc = "Go to First Non-Blank Character" })
+vim.keymap.set('n', '<M-H>',   '^', { noremap = true, silent = true, desc = "Go to First Non-Blank Character" })
+vim.keymap.set('n', '<M-S-l>', '$', { noremap = true, silent = true, desc = "Go to Line End" })
+vim.keymap.set('n', '<M-L>',   '$', { noremap = true, silent = true, desc = "Go to Line End" })
+
+-- Visual / Selection mode jumps
+vim.keymap.set({ 'v', 'x' }, '<M-S-h>', '^', { noremap = true, silent = true, desc = "Extend Selection to First Non-Blank Character" })
+vim.keymap.set({ 'v', 'x' }, '<M-H>',   '^', { noremap = true, silent = true, desc = "Extend Selection to First Non-Blank Character" })
+vim.keymap.set({ 'v', 'x' }, '<M-S-l>', '$', { noremap = true, silent = true, desc = "Extend Selection to Line End" })
+vim.keymap.set({ 'v', 'x' }, '<M-L>',   '$', { noremap = true, silent = true, desc = "Extend Selection to Line End" })
+
+-- Ctrl+h / Ctrl+l fallback in Insert mode
 vim.keymap.set('i', '<C-h>', '<Home>', { noremap = true, silent = true, desc = "Go to Line Start (Insert)" })
 vim.keymap.set('i', '<C-l>', '<End>',  { noremap = true, silent = true, desc = "Go to Line End (Insert)" })
--- Normal & Visual modes: Move cursor or extend visual selection to line start/end
-vim.keymap.set({ 'n', 'v', 'x' }, '<M-h>', '0', { noremap = true, silent = true, desc = "Go to Line Start" })
-vim.keymap.set({ 'n', 'v', 'x' }, '<M-l>', '$', { noremap = true, silent = true, desc = "Go to Line End" })
 
--- Home & End Selection with Shift (Alt+Shift+h / Alt+Shift+l)
-local function select_to_line_start_from_insert()
-  local col = vim.fn.col('.')
-  vim.cmd('stopinsert')
-  if col <= 1 then
-    vim.cmd('normal! v0')
-    return
-  end
-  vim.cmd('normal! v0')
-end
+-- Word Navigation (Alt + w / Alt + Shift + w)
+-- Forward word (Alt + w)
+vim.keymap.set('i', '<M-w>', '<C-o>w', { noremap = true, silent = true, desc = "Move Forward Word (Insert)" })
+vim.keymap.set({ 'n', 'v', 'x' }, '<M-w>', 'w', { noremap = true, silent = true, desc = "Move Forward Word" })
+vim.keymap.set('c', '<M-w>', '<S-Right>', { noremap = true, silent = true, desc = "Move Forward Word (Cmdline)" })
 
-local function select_to_line_end_from_insert()
-  local col = vim.fn.col('.')
-  local line_len = #vim.api.nvim_get_current_line()
-  vim.cmd('stopinsert')
-  if col > line_len then
-    return
-  end
-  local pos = vim.api.nvim_win_get_cursor(0)
-  vim.api.nvim_win_set_cursor(0, { pos[1], col - 1 })
-  vim.cmd('normal! v$')
-end
-
-vim.keymap.set('i', '<M-S-h>', select_to_line_start_from_insert, { noremap = true, silent = true, desc = "Select to Line Start from Insert" })
-vim.keymap.set('i', '<M-H>', select_to_line_start_from_insert, { noremap = true, silent = true, desc = "Select to Line Start from Insert" })
-vim.keymap.set('i', '<M-S-l>', select_to_line_end_from_insert, { noremap = true, silent = true, desc = "Select to Line End from Insert" })
-vim.keymap.set('i', '<M-L>', select_to_line_end_from_insert, { noremap = true, silent = true, desc = "Select to Line End from Insert" })
-
-vim.keymap.set('n', '<M-S-h>', 'v0', { noremap = true, silent = true, desc = "Select to Line Start" })
-vim.keymap.set('n', '<M-H>', 'v0', { noremap = true, silent = true, desc = "Select to Line Start" })
-vim.keymap.set('n', '<M-S-l>', 'v$', { noremap = true, silent = true, desc = "Select to Line End" })
-vim.keymap.set('n', '<M-L>', 'v$', { noremap = true, silent = true, desc = "Select to Line End" })
-
-vim.keymap.set({ 'v', 'x' }, '<M-S-h>', '0', { noremap = true, silent = true, desc = "Extend Selection to Line Start" })
-vim.keymap.set({ 'v', 'x' }, '<M-H>', '0', { noremap = true, silent = true, desc = "Extend Selection to Line Start" })
-vim.keymap.set({ 'v', 'x' }, '<M-S-l>', '$', { noremap = true, silent = true, desc = "Extend Selection to Line End" })
-vim.keymap.set({ 'v', 'x' }, '<M-L>', '$', { noremap = true, silent = true, desc = "Extend Selection to Line End" })
+-- Backward word (Alt + Shift + w / Alt + W)
+vim.keymap.set('i', '<M-S-w>', '<C-o>b', { noremap = true, silent = true, desc = "Move Backward Word (Insert)" })
+vim.keymap.set('i', '<M-W>',   '<C-o>b', { noremap = true, silent = true, desc = "Move Backward Word (Insert)" })
+vim.keymap.set({ 'n', 'v', 'x' }, '<M-S-w>', 'b', { noremap = true, silent = true, desc = "Move Backward Word" })
+vim.keymap.set({ 'n', 'v', 'x' }, '<M-W>',   'b', { noremap = true, silent = true, desc = "Move Backward Word" })
+vim.keymap.set('c', '<M-S-w>', '<S-Left>', { noremap = true, silent = true, desc = "Move Backward Word (Cmdline)" })
+vim.keymap.set('c', '<M-W>',   '<S-Left>', { noremap = true, silent = true, desc = "Move Backward Word (Cmdline)" })
 
 
 -- Open in OS Viewer
