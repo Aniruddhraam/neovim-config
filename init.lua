@@ -817,6 +817,109 @@ require("lazy").setup({
     config = function()
       local is_win = vim.fn.has("win32") == 1
 
+      --- Safely delete a buffer without closing windows or corrupting sidebar layouts
+      ---@param bufnr? integer Buffer number to delete (defaults to current buffer)
+      ---@param force? boolean Force delete modified buffer
+      local function safe_delete_buffer(bufnr, force)
+        bufnr = (bufnr and bufnr ~= 0) and bufnr or vim.api.nvim_get_current_buf()
+        if not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+        -- 1. Try mini.bufremove first for graceful buffer detachment
+        local ok_mini, mini_bufremove = pcall(require, "mini.bufremove")
+        if ok_mini and mini_bufremove.delete then
+          pcall(mini_bufremove.delete, bufnr, force or false)
+        else
+          -- Fallback: in every window showing this buffer, set a clean scratch buffer so the window is preserved
+          for _, win in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == bufnr then
+              local scratch = vim.api.nvim_create_buf(true, false)
+              pcall(vim.api.nvim_win_set_buf, win, scratch)
+            end
+          end
+          pcall(vim.api.nvim_buf_delete, bufnr, { force = force or false })
+        end
+
+        -- 2. Check if any normal code buffers remain open in visible windows
+        local has_code_win = false
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local cfg = vim.api.nvim_win_get_config(win)
+            if cfg.relative == "" then
+              local b = vim.api.nvim_win_get_buf(win)
+              local ft = vim.api.nvim_get_option_value("filetype", { buf = b })
+              local name = vim.api.nvim_buf_get_name(b)
+              if ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" and ft ~= "alpha" and name ~= "" then
+                has_code_win = true
+                break
+              end
+            end
+          end
+        end
+
+        -- 3. If no active code file is open, close Aerial so it doesn't monopolize the screen
+        if not has_code_win then
+          pcall(function() require("aerial").close() end)
+        end
+
+        -- 4. Reload NvimTree and preserve fixed sidebar widths
+        local ok_tree, tree_api = pcall(require, "nvim-tree.api")
+        if ok_tree and tree_api.tree.is_visible() then
+          pcall(tree_api.tree.reload)
+        end
+        if _G.Fix_Sidebar_Widths then
+          vim.schedule(_G.Fix_Sidebar_Widths)
+        end
+      end
+
+      _G.Safe_Delete_Buffer = safe_delete_buffer
+
+      --- Finds or creates a normal code window (outside NvimTree and Aerial sidebars)
+      ---@return integer winid The window ID of the code window
+      local function ensure_code_window()
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local cfg = vim.api.nvim_win_get_config(win)
+            if cfg.relative == "" then
+              local buf = vim.api.nvim_win_get_buf(win)
+              local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
+              if ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" and ft ~= "alpha" then
+                vim.api.nvim_set_current_win(win)
+                return win
+              end
+            end
+          end
+        end
+
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local cfg = vim.api.nvim_win_get_config(win)
+            if cfg.relative == "" then
+              local buf = vim.api.nvim_win_get_buf(win)
+              local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
+              if ft == "NvimTree" then
+                vim.api.nvim_win_call(win, function()
+                  vim.cmd("rightbelow vsplit")
+                end)
+                local new_win = vim.api.nvim_get_current_win()
+                local scratch = vim.api.nvim_create_buf(true, false)
+                vim.api.nvim_win_set_buf(new_win, scratch)
+                pcall(vim.api.nvim_set_option_value, "winfixwidth", false, { win = new_win })
+                if _G.Fix_Sidebar_Widths then vim.schedule(_G.Fix_Sidebar_Widths) end
+                return new_win
+              end
+            end
+          end
+        end
+
+        vim.cmd("vsplit")
+        local new_win = vim.api.nvim_get_current_win()
+        local scratch = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_win_set_buf(new_win, scratch)
+        return new_win
+      end
+
+      _G.Ensure_Code_Window = ensure_code_window
+
       --- Asynchronously delete a single file or directory in the background
       ---@param target_path string Path to delete
       ---@param on_done? fun(success: boolean) Callback on completion
@@ -845,12 +948,12 @@ require("lazy").setup({
           vim.schedule(function()
             if obj.code == 0 then
               vim.notify(string.format("Successfully deleted '%s'", name), vim.log.levels.INFO, { title = "Async Delete" })
-              -- Clean up any open buffers matching the deleted path
+              -- Clean up any open buffers matching the deleted path safely
               for _, buf in ipairs(vim.api.nvim_list_bufs()) do
                 if vim.api.nvim_buf_is_valid(buf) then
                   local buf_name = vim.api.nvim_buf_get_name(buf)
                   if buf_name ~= "" and (buf_name == target_path or (is_win and buf_name:lower() == target_path:lower())) then
-                    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+                    safe_delete_buffer(buf, true)
                   end
                 end
               end
@@ -2424,6 +2527,57 @@ vim.api.nvim_create_autocmd({ "VimResized" }, {
   end,
 })
 
+-- Safe Buffer & Window Layout Guard: prevents sidebars from monopolizing the layout
+-- or corrupting NvimTree when all normal file buffers are closed or deleted
+local layout_guard_group = vim.api.nvim_create_augroup("SafeBufferLayoutGuard", { clear = true })
+vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+  group = layout_guard_group,
+  callback = function()
+    vim.schedule(function()
+      local has_normal_win = false
+      local aerial_win = nil
+      local tree_win = nil
+
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(win) then
+          local cfg = vim.api.nvim_win_get_config(win)
+          if cfg.relative == "" then
+            local b = vim.api.nvim_win_get_buf(win)
+            local ft = vim.api.nvim_get_option_value("filetype", { buf = b })
+            if ft == "NvimTree" then
+              tree_win = win
+            elseif ft == "aerial" then
+              aerial_win = win
+            elseif ft ~= "toggleterm" and ft ~= "trouble" and ft ~= "alpha" then
+              has_normal_win = true
+            end
+          end
+        end
+      end
+
+      -- If all normal windows were destroyed, collapse Aerial immediately
+      if not has_normal_win and aerial_win and vim.api.nvim_win_is_valid(aerial_win) then
+        pcall(function() require("aerial").close() end)
+      end
+
+      -- If NvimTree is left with no normal window beside it, recreate the code window
+      -- so opening files never splits or crushes NvimTree
+      if not has_normal_win and tree_win and vim.api.nvim_win_is_valid(tree_win) then
+        vim.api.nvim_win_call(tree_win, function()
+          vim.cmd("rightbelow vsplit")
+          local new_win = vim.api.nvim_get_current_win()
+          local scratch = vim.api.nvim_create_buf(true, false)
+          vim.api.nvim_win_set_buf(new_win, scratch)
+        end)
+      end
+
+      if _G.Fix_Sidebar_Widths then
+        _G.Fix_Sidebar_Widths()
+      end
+    end)
+  end,
+})
+
 -- =========================================================================
 -- FILE CHANGE & DELETION HANDLER (AutoRead & E211 Prevention)
 -- =========================================================================
@@ -2684,7 +2838,11 @@ vim.api.nvim_create_user_command("CleanDeletedBuffers", function()
       local name = vim.api.nvim_buf_get_name(bufnr)
       local buftype = vim.bo[bufnr].buftype
       if buftype == "" and name ~= "" and vim.fn.filereadable(name) == 0 and not vim.bo[bufnr].modified then
-        pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+        if _G.Safe_Delete_Buffer then
+          _G.Safe_Delete_Buffer(bufnr, true)
+        else
+          pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+        end
         closed = closed + 1
       end
     end
@@ -2704,8 +2862,8 @@ vim.keymap.set('v', '?', '?\\V', { noremap = true, desc = "Literal Search Backwa
 
 -- fzf-lua File Finders & Grep
 vim.keymap.set('n', '<C-f>', function() require('fzf-lua').blines() end, { noremap = true, silent = true, desc = "Fuzzy Find in File (fzf-lua)" })
-vim.keymap.set('n', '<leader>f', function() require('fzf-lua').files() end, { noremap = true, silent = true, desc = "Find Files (fzf-lua)" })
-vim.keymap.set('n', '<leader>F', function() require('fzf-lua').live_grep() end, { noremap = true, silent = true, desc = "Find Text (fzf-lua)" })
+vim.keymap.set('n', '<leader>f', function() if _G.Ensure_Code_Window then _G.Ensure_Code_Window() end; require('fzf-lua').files() end, { noremap = true, silent = true, desc = "Find Files (fzf-lua)" })
+vim.keymap.set('n', '<leader>F', function() if _G.Ensure_Code_Window then _G.Ensure_Code_Window() end; require('fzf-lua').live_grep() end, { noremap = true, silent = true, desc = "Find Text (fzf-lua)" })
 vim.keymap.set('n', '<leader>d', function() _G.Fzf_Browse_Dirs() end, { noremap = true, silent = true, desc = "Browse Directories (Root)" })
 vim.keymap.set('n', '<leader>fd', function() _G.Fzf_Browse_Dirs() end, { noremap = true, silent = true, desc = "Browse Directories (Root)" })
 vim.keymap.set('n', '<leader>fb', function() _G.Fzf_Browse_Dirs() end, { noremap = true, silent = true, desc = "Browse Directories (Root)" })
@@ -2936,18 +3094,29 @@ end
 
 vim.keymap.set('n', '<leader>w', function()
   if vim.bo.filetype == "NvimTree" or vim.bo.filetype == "aerial" or vim.bo.filetype == "alpha" then return end
-  if get_normal_window_count() > 1 then vim.cmd("close") else
-    if not require("mini.bufremove").delete(0, false) then vim.cmd('bdelete!') end
+  if get_normal_window_count() > 1 then
+    vim.cmd("close")
+  else
+    if _G.Safe_Delete_Buffer then
+      _G.Safe_Delete_Buffer(0, false)
+    elseif not require("mini.bufremove").delete(0, false) then
+      vim.cmd('bdelete!')
+    end
   end
 end, { noremap = true, silent = true, desc = "Close Current File or Split Safely" })
 
 -- General Core Bindings
 vim.keymap.set('n', '<leader>q', ':qa<CR>', { noremap = true, silent = true, desc = "Quit All" })
 vim.keymap.set({ 'n', 'i', 'v' }, '<C-s>', '<cmd>w<CR>', { noremap = true, silent = true })
-vim.keymap.set('n', '<C-z>', 'u', { noremap = true, silent = true })
-vim.keymap.set('i', '<C-z>', '<C-o>u', { noremap = true, silent = true })
-vim.keymap.set('n', '<C-y>', '<C-r>', { noremap = true, silent = true })
-vim.keymap.set('i', '<C-y>', '<C-o><C-r>', { noremap = true, silent = true })
+-- Undo / Redo Keybindings (Replaces OS suspension to background & swp file lock)
+vim.keymap.set('n', '<C-z>', 'u', { noremap = true, silent = true, desc = "Undo" })
+vim.keymap.set('i', '<C-z>', '<C-g>u<C-o>u', { noremap = true, silent = true, desc = "Undo (Insert)" })
+vim.keymap.set({ 'v', 'x', 's' }, '<C-z>', '<Esc>u', { noremap = true, silent = true, desc = "Undo" })
+vim.keymap.set({ 'c', 't' }, '<C-z>', '<Nop>', { noremap = true, silent = true, desc = "Disabled Ctrl-Z suspension" })
+
+vim.keymap.set('n', '<C-y>', '<C-r>', { noremap = true, silent = true, desc = "Redo" })
+vim.keymap.set('i', '<C-y>', '<C-o><C-r>', { noremap = true, silent = true, desc = "Redo (Insert)" })
+vim.keymap.set({ 'v', 'x', 's' }, '<C-y>', '<Esc><C-r>', { noremap = true, silent = true, desc = "Redo" })
 -- Universal Smart Escape: Cancels active snippet sessions/placeholders, clears highlights, and cleanly exits to Normal mode
 local function smart_escape()
   if vim.snippet and vim.snippet.active() then
