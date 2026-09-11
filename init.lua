@@ -3121,7 +3121,26 @@ vim.keymap.set('n', '<leader>w', function()
 end, { noremap = true, silent = true, desc = "Close Current File or Split Safely" })
 
 -- General Core Bindings
-vim.keymap.set('n', '<leader>q', ':qa<CR>', { noremap = true, silent = true, desc = "Quit All" })
+vim.keymap.set('n', '<leader>q', function()
+  local is_dashboard = vim.bo.filetype == "alpha"
+  if not is_dashboard then
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_is_valid(win) then
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.api.nvim_get_option_value("filetype", { buf = buf }) == "alpha" then
+          is_dashboard = true
+          break
+        end
+      end
+    end
+  end
+
+  if is_dashboard then
+    vim.cmd("qa")
+  else
+    vim.notify("Quitting Neovim is only allowed from the dashboard. Use <leader>h to return to dashboard.", vim.log.levels.WARN, { title = "Quit NVIM" })
+  end
+end, { noremap = true, silent = true, desc = "Quit NVIM (Dashboard Only)" })
 vim.keymap.set({ 'n', 'i', 'v' }, '<C-s>', '<cmd>w<CR>', { noremap = true, silent = true })
 -- Undo / Redo Keybindings (Replaces OS suspension to background & swp file lock)
 vim.keymap.set('n', '<C-z>', 'u', { noremap = true, silent = true, desc = "Undo" })
@@ -3156,7 +3175,7 @@ vim.api.nvim_create_autocmd("ModeChanged", {
 })
 
 vim.keymap.set('n', '<Esc>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
-vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-j>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
+vim.keymap.set('c', '<M-j>', smart_escape, { noremap = true, silent = true, desc = "Escape (Cmdline)" })
 
 -- Escape with Alt+u
 vim.keymap.set({ 'i', 'n', 'v', 'x', 's', 'c' }, '<M-u>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
@@ -3183,6 +3202,40 @@ vim.keymap.set('n', '<M-h>', 'h', { noremap = true, silent = true, desc = "Move 
 vim.keymap.set('n', '<M-j>', 'j', { noremap = true, silent = true, desc = "Move Down (Normal)" })
 vim.keymap.set('n', '<M-k>', 'k', { noremap = true, silent = true, desc = "Move Up (Normal)" })
 vim.keymap.set('n', '<M-l>', 'l', { noremap = true, silent = true, desc = "Move Right (Normal)" })
+
+-- Visual / Select mode: cancel selection and move cursor, preserving insert mode if started from insert
+local function cancel_visual_and_move(dir)
+  local from_insert = _G._selection_from_insert
+  _G._selection_from_insert = false
+
+  local esc = vim.api.nvim_replace_termcodes('<Esc>', true, false, true)
+  vim.api.nvim_feedkeys(esc, 'x', false)
+
+  if from_insert then
+    if dir == 'l' then
+      local line = vim.api.nvim_get_current_line()
+      local col = vim.api.nvim_win_get_cursor(0)[2]
+      if col >= #line - 1 then
+        vim.cmd('startinsert!')
+      else
+        pcall(vim.cmd, 'normal! l')
+        vim.cmd('startinsert')
+      end
+    else
+      pcall(vim.cmd, 'normal! ' .. dir)
+      vim.cmd('startinsert')
+    end
+  else
+    pcall(vim.cmd, 'normal! ' .. dir)
+  end
+end
+
+for _, key in ipairs({ 'h', 'j', 'k', 'l' }) do
+  local dir_names = { h = "Left", j = "Down", k = "Up", l = "Right" }
+  vim.keymap.set({ 'v', 'x', 's' }, '<M-' .. key .. '>', function()
+    cancel_visual_and_move(key)
+  end, { noremap = true, silent = true, desc = "Cancel Selection & Move " .. dir_names[key] })
+end
 
 -- Jump to Start (First Non-Blank / Toggle Col 0) & End of Line (Alt+Shift+h / Alt+Shift+l)
 local function jump_to_line_start_insert()
@@ -3292,13 +3345,108 @@ vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { noremap = true, silent = true
 vim.keymap.set('n', '<leader>th', ':ToggleTerm direction=horizontal<CR>', { noremap = true, silent = true, desc = "Terminal (Horizontal)" })
 vim.keymap.set('n', '<leader>tv', ':ToggleTerm direction=vertical size=40<CR>', { noremap = true, silent = true, desc = "Terminal (Vertical)" })
 
+-- =========================================================================
+-- SELECTION TRACKING & VISUAL/SELECT MODE HANDLERS
+-- =========================================================================
+-- Track whether a selection originated from Insert mode
+_G._selection_from_insert = false
+local last_insert_exit = 0
+local insert_selection_group = vim.api.nvim_create_augroup("InsertModeSelectionTracking", { clear = true })
+
+vim.api.nvim_create_autocmd("ModeChanged", {
+  group = insert_selection_group,
+  pattern = "i:*",
+  callback = function()
+    last_insert_exit = vim.uv.hrtime()
+  end,
+})
+
+vim.api.nvim_create_autocmd("ModeChanged", {
+  group = insert_selection_group,
+  pattern = "*:[vs\x16]*",
+  callback = function()
+    local diff_ms = (vim.uv.hrtime() - last_insert_exit) / 1e6
+    if diff_ms < 150 then
+      _G._selection_from_insert = true
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd("ModeChanged", {
+  group = insert_selection_group,
+  pattern = "[vs\x16]*:n",
+  callback = function()
+    vim.schedule(function()
+      if vim.api.nvim_get_mode().mode == "n" then
+        _G._selection_from_insert = false
+      end
+    end)
+  end,
+})
+
+local function ensure_visual_mode()
+  local mode = vim.api.nvim_get_mode().mode
+  if mode:find("s") then
+    local cg = vim.api.nvim_replace_termcodes("<C-g>", true, false, true)
+    vim.api.nvim_feedkeys(cg, "x", false)
+  end
+end
+
+local function visual_yank()
+  local from_insert = _G._selection_from_insert
+  _G._selection_from_insert = false
+  ensure_visual_mode()
+  local cur = vim.api.nvim_win_get_cursor(0)
+  vim.cmd("normal! y")
+  if from_insert then
+    pcall(vim.api.nvim_win_set_cursor, 0, cur)
+    vim.cmd("startinsert")
+  end
+end
+
+local function visual_cut()
+  local from_insert = _G._selection_from_insert
+  _G._selection_from_insert = false
+  ensure_visual_mode()
+  vim.cmd("normal! d")
+  if from_insert then
+    vim.cmd("startinsert")
+  end
+end
+
+local function visual_delete_blackhole()
+  local from_insert = _G._selection_from_insert
+  _G._selection_from_insert = false
+  ensure_visual_mode()
+  vim.cmd('normal! "_d')
+  if from_insert then
+    vim.cmd("startinsert")
+  end
+end
+
+local function visual_paste()
+  local from_insert = _G._selection_from_insert
+  _G._selection_from_insert = false
+  ensure_visual_mode()
+  vim.cmd('normal! "_dP')
+  if from_insert then
+    vim.cmd("startinsert")
+  end
+end
+
+local function start_selection_from_insert(motion)
+  _G._selection_from_insert = true
+  vim.cmd("stopinsert")
+  vim.cmd("normal! v" .. motion)
+end
+
 -- Visual / Select Mode Overrides
-local modes = {'v', 's'}
+local modes = {'v', 'x', 's'}
 for _, mode in ipairs(modes) do
-  vim.keymap.set(mode, '<BS>', (mode == 's' and '<C-g>' or '') .. '"_d', { noremap = true })
-  vim.keymap.set(mode, '<Del>', (mode == 's' and '<C-g>' or '') .. '"_d', { noremap = true })
-  vim.keymap.set(mode, 'p', (mode == 's' and '<C-g>' or '') .. '"_dP', { noremap = true })
-  vim.keymap.set(mode, 'P', (mode == 's' and '<C-g>' or '') .. '"_dP', { noremap = true })
+  vim.keymap.set(mode, '<BS>', visual_delete_blackhole, { noremap = true, silent = true, desc = "Delete selection" })
+  vim.keymap.set(mode, '<Del>', visual_delete_blackhole, { noremap = true, silent = true, desc = "Delete selection" })
+  vim.keymap.set(mode, 'p', visual_paste, { noremap = true, silent = true, desc = "Paste over selection" })
+  vim.keymap.set(mode, 'P', visual_paste, { noremap = true, silent = true, desc = "Paste over selection" })
 end
 
 -- Directional Visual Selection Keybindings (Shift + H/J/K/L, Shift + W/B, Shift + Arrows)
@@ -3350,10 +3498,16 @@ vim.keymap.set({ 'v', 'x' }, '<S-Right>', 'w', { noremap = true, silent = true, 
 
 -- Shift + Alt + J / K: Select multiple lines downward / upward (Insert, Normal, and Visual mode)
 -- Insert mode: start selection and step downward / upward
-vim.keymap.set('i', '<M-S-j>', '<Esc>vj', { noremap = true, silent = true, desc = "Select line downward" })
-vim.keymap.set('i', '<M-J>',   '<Esc>vj', { noremap = true, silent = true, desc = "Select line downward" })
-vim.keymap.set('i', '<M-S-k>', '<Esc>vk', { noremap = true, silent = true, desc = "Select line upward" })
-vim.keymap.set('i', '<M-K>',   '<Esc>vk', { noremap = true, silent = true, desc = "Select line upward" })
+vim.keymap.set('i', '<M-S-j>', function() start_selection_from_insert("j") end, { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('i', '<M-J>',   function() start_selection_from_insert("j") end, { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('i', '<M-S-k>', function() start_selection_from_insert("k") end, { noremap = true, silent = true, desc = "Select line upward" })
+vim.keymap.set('i', '<M-K>',   function() start_selection_from_insert("k") end, { noremap = true, silent = true, desc = "Select line upward" })
+
+-- Shift + Arrows from Insert mode: start selection and track insert origin
+vim.keymap.set('i', '<S-Down>',  function() start_selection_from_insert("j") end, { noremap = true, silent = true, desc = "Select line downward (Insert)" })
+vim.keymap.set('i', '<S-Up>',    function() start_selection_from_insert("k") end, { noremap = true, silent = true, desc = "Select line upward (Insert)" })
+vim.keymap.set('i', '<S-Left>',  function() start_selection_from_insert("b") end, { noremap = true, silent = true, desc = "Select word backward (Insert)" })
+vim.keymap.set('i', '<S-Right>', function() start_selection_from_insert("w") end, { noremap = true, silent = true, desc = "Select word forward (Insert)" })
 
 -- Normal mode: start selection and step downward / upward
 vim.keymap.set('n', '<M-S-j>', 'vj', { noremap = true, silent = true, desc = "Select line downward" })
@@ -3376,16 +3530,17 @@ vim.keymap.set('n', 'dgg', 'gg', { noremap = true, silent = true, desc = "Preven
 -- =========================================================================
 -- 6. VS CODE STYLE COPY / CUT / PASTE 
 -- =========================================================================
-vim.keymap.set('s', 'y', '<C-g>y', { noremap = true, silent = true })
-vim.keymap.set('v', '<C-c>', 'y', { noremap = true, silent = true })
-vim.keymap.set('s', '<C-c>', '<C-g>y', { noremap = true, silent = true })
-vim.keymap.set('n', '<C-c>', 'yy', { noremap = true, silent = true })
-vim.keymap.set('i', '<C-c>', '<C-o>yy', { noremap = true, silent = true })
-vim.keymap.set('v', '<C-x>', 'x', { noremap = true, silent = true })
-vim.keymap.set('s', '<C-x>', '<C-g>c', { noremap = true, silent = true })
-vim.keymap.set('n', '<C-x>', 'dd', { noremap = true, silent = true })
-vim.keymap.set('i', '<C-x>', '<C-o>dd', { noremap = true, silent = true })
-vim.keymap.set('i', '<C-v>', '<C-r>+', { noremap = true, silent = true })
+vim.keymap.set({ 'v', 'x', 's' }, 'y', visual_yank, { noremap = true, silent = true, desc = "Yank selection" })
+vim.keymap.set({ 'v', 'x', 's' }, 'Y', visual_yank, { noremap = true, silent = true, desc = "Yank selection" })
+vim.keymap.set({ 'v', 'x', 's' }, '<C-c>', visual_yank, { noremap = true, silent = true, desc = "Copy selection" })
+vim.keymap.set('n', '<C-c>', 'yy', { noremap = true, silent = true, desc = "Copy Line" })
+vim.keymap.set('i', '<C-c>', '<C-o>yy', { noremap = true, silent = true, desc = "Copy Line" })
+vim.keymap.set({ 'v', 'x', 's' }, 'd', visual_cut, { noremap = true, silent = true, desc = "Cut selection" })
+vim.keymap.set({ 'v', 'x', 's' }, 'x', visual_cut, { noremap = true, silent = true, desc = "Cut selection" })
+vim.keymap.set({ 'v', 'x', 's' }, '<C-x>', visual_cut, { noremap = true, silent = true, desc = "Cut selection" })
+vim.keymap.set('n', '<C-x>', 'dd', { noremap = true, silent = true, desc = "Cut Line" })
+vim.keymap.set('i', '<C-x>', '<C-o>dd', { noremap = true, silent = true, desc = "Cut Line" })
+vim.keymap.set('i', '<C-v>', '<C-r>+', { noremap = true, silent = true, desc = "Paste" })
 
 vim.keymap.set('n', '<leader>U', function()
   print("Updating plugins...")
