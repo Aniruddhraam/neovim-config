@@ -1247,15 +1247,28 @@ require("lazy").setup({
           if line ~= "" then
             local parsed = nil
 
-            -- Pattern 1: Ruff / Python "error: Failed to parse <filename>:<line>:<col>: <msg>"
-            local ruff_file, ruff_l, ruff_c, ruff_msg = line:match("error:%s*Failed to parse%s+([^:]+):(%d+):(%d+):%s*(.+)")
-            if ruff_file then
+            -- Pattern 1: Black / Python "error: cannot format <filename>: Cannot parse: <line>:<col>"
+            local black_file, black_l, black_c = line:match("error:%s*cannot format%s+([^:]+):%s*Cannot parse:%s*(%d+):(%d+)")
+            if black_file then
               parsed = {
-                file = ruff_file,
-                lnum = tonumber(ruff_l),
-                col = tonumber(ruff_c),
-                msg = ruff_msg,
+                file = (black_file ~= "" and black_file ~= "-") and black_file or (default_buf_name ~= "" and default_buf_name or "<standard input>"),
+                lnum = tonumber(black_l),
+                col = tonumber(black_c),
+                msg = "Cannot parse syntax",
               }
+            end
+
+            -- Pattern 2: Ruff / Python "error: Failed to parse <filename>:<line>:<col>: <msg>"
+            if not parsed then
+              local ruff_file, ruff_l, ruff_c, ruff_msg = line:match("error:%s*Failed to parse%s+([^:]+):(%d+):(%d+):%s*(.+)")
+              if ruff_file then
+                parsed = {
+                  file = ruff_file,
+                  lnum = tonumber(ruff_l),
+                  col = tonumber(ruff_c),
+                  msg = ruff_msg,
+                }
+              end
             end
 
             -- Pattern 2: Standard input with path prefix or <standard input>:
@@ -1464,7 +1477,7 @@ require("lazy").setup({
           json = { "oxfmt" },
           yaml = { "oxfmt" },
           markdown = { "oxfmt" },
-          python = { "ruff_format" },
+          python = { "black" },
           c = { "clang-format" },
           cpp = { "clang-format" },
           rust = { "rustfmt" },
@@ -1493,11 +1506,13 @@ require("lazy").setup({
             args = { "--stdin-filepath", "$FILENAME" },
             stdin = true,
           },
-          ruff_format = { prepend_args = { "--config", 'format.indent-style="space"', "--config", "indent-width=4" } },
           ["clang-format"] = { prepend_args = { "-style={UseTab: Always, TabWidth: 4, IndentWidth: 4}" } },
           rustfmt = { prepend_args = { "--config", "hard_tabs=true,tab_spaces=4" } },
         },
       })
+
+      -- Use conform as the formatexpr for gq formatting
+      vim.o.formatexpr = "v:lua.require'conform'.formatexpr()"
 
       -- Interactive navigation inside :ConformInfo floating window
       vim.api.nvim_create_autocmd("FileType", {
@@ -3142,8 +3157,6 @@ vim.api.nvim_create_autocmd("ModeChanged", {
 
 vim.keymap.set('n', '<Esc>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
 vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-j>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-J>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
-vim.keymap.set({ 'v', 'x', 's', 'c' }, '<M-S-j>', smart_escape, { noremap = true, silent = true, desc = "Escape" })
 
 -- Escape with Alt+u
 vim.keymap.set({ 'i', 'n', 'v', 'x', 's', 'c' }, '<M-u>', smart_escape, { noremap = true, silent = true, desc = "Escape / Clear Search / Stop Snippet" })
@@ -3335,8 +3348,30 @@ vim.keymap.set({ 'v', 'x' }, '<S-Up>', 'k', { noremap = true, silent = true, des
 vim.keymap.set({ 'v', 'x' }, '<S-Left>', 'b', { noremap = true, silent = true, desc = "Extend selection word backward" })
 vim.keymap.set({ 'v', 'x' }, '<S-Right>', 'w', { noremap = true, silent = true, desc = "Extend selection word forward" })
 
+-- Shift + Alt + J / K: Select multiple lines downward / upward (Insert, Normal, and Visual mode)
+-- Insert mode: start selection and step downward / upward
+vim.keymap.set('i', '<M-S-j>', '<Esc>vj', { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('i', '<M-J>',   '<Esc>vj', { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('i', '<M-S-k>', '<Esc>vk', { noremap = true, silent = true, desc = "Select line upward" })
+vim.keymap.set('i', '<M-K>',   '<Esc>vk', { noremap = true, silent = true, desc = "Select line upward" })
+
+-- Normal mode: start selection and step downward / upward
+vim.keymap.set('n', '<M-S-j>', 'vj', { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('n', '<M-J>',   'vj', { noremap = true, silent = true, desc = "Select line downward" })
+vim.keymap.set('n', '<M-S-k>', 'vk', { noremap = true, silent = true, desc = "Select line upward" })
+vim.keymap.set('n', '<M-K>',   'vk', { noremap = true, silent = true, desc = "Select line upward" })
+
+-- Visual / Selection mode: extend selection downward / upward
+vim.keymap.set({ 'v', 'x' }, '<M-S-j>', 'j', { noremap = true, silent = true, desc = "Extend selection downward" })
+vim.keymap.set({ 'v', 'x' }, '<M-J>',   'j', { noremap = true, silent = true, desc = "Extend selection downward" })
+vim.keymap.set({ 'v', 'x' }, '<M-S-k>', 'k', { noremap = true, silent = true, desc = "Extend selection upward" })
+vim.keymap.set({ 'v', 'x' }, '<M-K>',   'k', { noremap = true, silent = true, desc = "Extend selection upward" })
+
 -- Join lines alternative (since J is now selection downward)
 vim.keymap.set('n', 'gJ', 'J', { noremap = true, silent = true, desc = "Join Lines" })
+
+-- Guard against accidental `dgg` caused by <C-d> -> gg rollover
+vim.keymap.set('n', 'dgg', 'gg', { noremap = true, silent = true, desc = "Prevent accidental deletion from <C-d> + gg rollover" })
 
 -- =========================================================================
 -- 6. VS CODE STYLE COPY / CUT / PASTE 
