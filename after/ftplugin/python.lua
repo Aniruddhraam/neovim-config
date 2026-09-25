@@ -1,4 +1,5 @@
--- Python buffer-local indentation and formatting configuration
+-- Python buffer-local indentation and formatting configuration (Black style: 4-space indent, no tabs)
+-- Hanging-indent rules live in vim.g.python_indent in init.lua
 vim.opt_local.expandtab = true
 vim.opt_local.shiftwidth = 4
 vim.opt_local.tabstop = 4

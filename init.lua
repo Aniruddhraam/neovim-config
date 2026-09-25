@@ -210,7 +210,6 @@ require("lazy").setup({
 
           hl.TroubleNormal = { bg = "NONE" }
           hl.TroubleNormalNC = { bg = "NONE" }
-          hl.NotifyBG = { bg = "NONE" }
         end,
       })
       vim.cmd[[colorscheme tokyonight]]
@@ -338,7 +337,10 @@ require("lazy").setup({
           actions = {
             ["default"] = function(selected)
               if selected and selected[1] then _G.Open_Project_Directory(selected[1]) end
-            end
+            end,
+            ["ctrl-e"] = function(selected)
+              if selected and selected[1] then _G.Open_Project_Directory(selected[1]) end
+            end,
           }
         })
       end
@@ -580,9 +582,9 @@ require("lazy").setup({
 
       require("auto-session").setup({
         log_level = "error",
-        auto_session_suppress_dirs = { "~/", "~/Downloads", "/" },
-        auto_restore_enabled = true, 
-        auto_save_enabled = true,
+        suppressed_dirs = { "~/", "~/Downloads", "/" },
+        auto_restore = false, -- Loaded at VeryLazy (after VimEnter), so auto-restore can't run; sessions open from the dashboard
+        auto_save = true,
         bypass_save_filetypes = { "alpha" },
         pre_save_cmds = { 
           "NvimTreeClose", 
@@ -609,19 +611,6 @@ require("lazy").setup({
         },
       })
     end,
-  },
-
-  -- Project Root Detection & Management
-  {
-    "coffebar/project.nvim",
-    event = "VeryLazy",
-    config = function()
-      require("project_nvim").setup({
-        manual_mode = true, -- Don't auto-change cwd; we track it explicitly
-        detection_methods = { "pattern" },
-        patterns = { ".git", "_darcs", ".hg", ".bzr", ".svn", "Makefile", "package.json", "go.mod" },
-      })
-    end
   },
 
   -- Lightning Fast Navigation (Flash)
@@ -735,21 +724,6 @@ require("lazy").setup({
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       local fzf = require("fzf-lua")
-      local path = require("fzf-lua.path")
-
-      -- Universal function to open a highlighted item's directory in NvimTree
-      local open_in_tree = function(selected)
-        if not selected or #selected == 0 then return end
-        local entry = selected[1]
-        local file_path = path.entry_to_file(entry).path
-        if _G.Open_Project_Directory then
-          _G.Open_Project_Directory(file_path)
-        else
-          local dir = vim.fn.isdirectory(file_path) == 1 and file_path or vim.fn.fnamemodify(file_path, ":h")
-          vim.cmd("cd " .. vim.fn.fnameescape(dir))
-          vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(dir))
-        end
-      end
 
       fzf.setup({
         winopts = {
@@ -781,14 +755,8 @@ require("lazy").setup({
             ["alt-U"] = "abort",
             ["ctrl-j"] = "down",
             ["ctrl-k"] = "up",
-            ["ctrl-e"] = "accept",
             ["ctrl-u"] = "unix-line-discard",
             ["esc"] = "abort",
-          },
-        },
-        actions = {
-          files = {
-            ["ctrl-e"] = open_in_tree,
           },
         },
         files = {
@@ -883,6 +851,20 @@ require("lazy").setup({
               local buf = vim.api.nvim_win_get_buf(win)
               local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
               if ft ~= "NvimTree" and ft ~= "aerial" and ft ~= "toggleterm" and ft ~= "trouble" and ft ~= "alpha" then
+                vim.api.nvim_set_current_win(win)
+                return win
+              end
+            end
+          end
+        end
+
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_is_valid(win) then
+            local cfg = vim.api.nvim_win_get_config(win)
+            if cfg.relative == "" then
+              local buf = vim.api.nvim_win_get_buf(win)
+              local ft = vim.api.nvim_get_option_value("filetype", { buf = buf })
+              if ft == "alpha" then
                 vim.api.nvim_set_current_win(win)
                 return win
               end
@@ -1714,7 +1696,6 @@ require("lazy").setup({
   -- =========================================================================
   {
     "mfussenegger/nvim-dap",
-    event = "VeryLazy",
     cmd = { "DapContinue", "DapToggleBreakpoint", "DapStepOver", "DapStepInto", "DapStepOut", "DapTerminate" },
     dependencies = {
       {
@@ -2058,7 +2039,7 @@ require("lazy").setup({
           i = { ["<Esc>"] = "Close", ["<CR>"] = "Confirm", ["<Up>"] = "HistoryPrev", ["<Down>"] = "HistoryNext" },
         }
       },
-      select = { backend = { "fzf_lua", "builtin" }, builtin = { border = "rounded" } },
+      select = { enabled = false }, -- fzf-lua's register_ui_select() handles vim.ui.select
     },
   },
 
@@ -2128,7 +2109,6 @@ require("lazy").setup({
       lsp = {
         override = {
           ["vim.lsp.util.convert_input_to_markdown_lines"] = true,
-          ["vim.lsp.util.styled_parts"] = true,
         },
       },
       presets = {
@@ -2147,7 +2127,6 @@ require("lazy").setup({
     opts = {
       render = "background",
       enable_named_colors = true,
-      enable_tail_wind = true,
     },
   },
 
@@ -2176,17 +2155,7 @@ require("lazy").setup({
 -- 3. LSP CONFIGURATION 
 -- =========================================================================
 
--- Defer resolving Blink capabilities until an LSP client starts to avoid eager plugin loading on startup
-local capabilities = setmetatable({}, {
-  __index = function(_, key)
-    local base = vim.lsp.protocol.make_client_capabilities()
-    local ok, blink = pcall(require, "blink.cmp")
-    local caps = ok and blink.get_lsp_capabilities(base) or base
-    return caps[key]
-  end,
-})
-
-vim.lsp.config("*", { capabilities = capabilities })
+-- Completion capabilities are registered by blink.cmp itself (plugin/blink-cmp.lua) when it loads
 
 -- TypeScript / JavaScript LSP (vtsls - High-performance VS Code TypeScript Language Service)
 vim.lsp.config("vtsls", {
@@ -2201,7 +2170,6 @@ vim.lsp.config("vtsls", {
   },
   root_markers = { "tsconfig.json", "package.json", "jsconfig.json", ".git" },
   settings = {
-    complete_function_calls = true,
     vtsls = {
       enableMoveToFileCodeAction = true,
       autoUseWorkspaceTsdk = true,
@@ -2263,7 +2231,11 @@ vim.lsp.config("oxlint", {
   },
 })
 
-vim.lsp.config("clangd", { cmd = { "clangd" }, filetypes = { "c", "cpp", "objc", "objcpp" } })
+vim.lsp.config("clangd", {
+  cmd = { "clangd" },
+  filetypes = { "c", "cpp", "objc", "objcpp" },
+  root_markers = { "compile_commands.json", "compile_flags.txt", ".clangd", ".git" },
+})
 local basedpyright_analysis = {
   autoSearchPaths = true,
   useLibraryCodeForTypes = true,
@@ -2315,7 +2287,7 @@ vim.lsp.config("basedpyright", {
     },
   },
 })
-vim.lsp.config("rust_analyzer", { cmd = { "rust-analyzer" }, filetypes = { "rust" }, settings = { ["rust-analyzer"] = { checkOnSave = true, check = { command = "check" }, cargo = { allFeatures = true } } } })
+vim.lsp.config("rust_analyzer", { cmd = { "rust-analyzer" }, filetypes = { "rust" }, root_markers = { "Cargo.toml", "rust-project.json", ".git" }, settings = { ["rust-analyzer"] = { checkOnSave = true, check = { command = "check" }, cargo = { allFeatures = true } } } })
 
 -- Go LSP (Resolved to native GOPATH binary to avoid Windows Device Guard blocking Mason AppData package)
 local function get_gopls_cmd()
@@ -2371,6 +2343,14 @@ vim.lsp.config("jdtls", {
 vim.lsp.config("texlab", {
   cmd = { "texlab" },
   filetypes = { "tex", "plaintex", "bib" },
+  root_markers = { ".latexmkrc", "latexmkrc", ".texlabroot", "texlabroot", "Tectonic.toml", ".git" },
+})
+
+-- TOML LSP
+vim.lsp.config("taplo", {
+  cmd = { "taplo", "lsp", "stdio" },
+  filetypes = { "toml" },
+  root_markers = { ".taplo.toml", "taplo.toml", ".git" },
 })
 
 vim.lsp.enable("vtsls")
@@ -2444,19 +2424,6 @@ vim.g.python_indent = {
 vim.g.pyindent_open_paren = "shiftwidth()"
 vim.g.pyindent_nested_paren = "shiftwidth()"
 vim.g.pyindent_continue = "shiftwidth()"
-
--- Python FileType configuration: enforce 4-space indentation and prevent mixing tabs and spaces
-vim.api.nvim_create_autocmd("FileType", {
-  pattern = "python",
-  desc = "Python indentation and formatting options",
-  callback = function(args)
-    vim.bo[args.buf].expandtab = true
-    vim.bo[args.buf].shiftwidth = 4
-    vim.bo[args.buf].tabstop = 4
-    vim.bo[args.buf].softtabstop = 4
-    vim.bo[args.buf].smartindent = true
-  end,
-})
 
 vim.diagnostic.config({
   float = {
@@ -2799,19 +2766,6 @@ vim.api.nvim_create_autocmd({ "BufWriteCmd" }, {
   end,
 })
 
--- Rounded borders for LSP floating windows
-vim.lsp.handlers["textDocument/hover"] = function(err, result, ctx, config)
-  config = config or {}
-  config.border = "rounded"
-  return vim.lsp.handlers.hover(err, result, ctx, config)
-end
-
-vim.lsp.handlers["textDocument/signatureHelp"] = function(err, result, ctx, config)
-  config = config or {}
-  config.border = "rounded"
-  return vim.lsp.handlers.signature_help(err, result, ctx, config)
-end
-
 -- =========================================================================
 -- 5. CUSTOM KEYBINDINGS & COMMANDS
 -- =========================================================================
@@ -2912,6 +2866,7 @@ vim.keymap.set('n', '<leader>dt', function()
   if file_dir ~= root and file_dir:sub(1, #root) == root then
     rel_dir = "./" .. file_dir:sub(#root + 2):gsub("\\", "/")
   end
+  require("dap") -- loads nvim-dap's config, which sets up dap-go
   local dap_go = require("dap-go")
   local ok = dap_go.debug_test({
     program = rel_dir,
@@ -2929,14 +2884,14 @@ vim.keymap.set('n', '<leader>dt', function()
     })
   end
 end, { noremap = true, silent = true, desc = "Debug: Go Test Under Cursor" })
-vim.keymap.set('n', '<leader>dT', function() require('dap-go').debug_last_test() end, { noremap = true, silent = true, desc = "Debug: Last Go Test" })
+vim.keymap.set('n', '<leader>dT', function() require('dap'); require('dap-go').debug_last_test() end, { noremap = true, silent = true, desc = "Debug: Last Go Test" })
 vim.keymap.set('n', '<leader>dq', function()
   require('dap').terminate()
   require('dapui').close()
 end, { noremap = true, silent = true, desc = "Debug: Terminate & Close UI" })
-vim.keymap.set('n', '<leader>du', function() require('dapui').toggle() end, { noremap = true, silent = true, desc = "Debug: Toggle DAP UI" })
+vim.keymap.set('n', '<leader>du', function() require('dap'); require('dapui').toggle() end, { noremap = true, silent = true, desc = "Debug: Toggle DAP UI" })
 vim.keymap.set('n', '<leader>dr', function() require('dap').repl.toggle() end, { noremap = true, silent = true, desc = "Debug: Toggle REPL" })
-vim.keymap.set({ 'n', 'v' }, '<leader>de', function() require('dapui').eval() end, { noremap = true, silent = true, desc = "Debug: Evaluate Expression" })
+vim.keymap.set({ 'n', 'v' }, '<leader>de', function() require('dap'); require('dapui').eval() end, { noremap = true, silent = true, desc = "Debug: Evaluate Expression" })
 
 -- =========================================================================
 -- THE NEW PROJECT / SESSION WORKFLOW
