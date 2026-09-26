@@ -244,6 +244,33 @@ require("lazy").setup({
           opts = { position = "center", hl = "Keyword" }
       }
 
+      -- Point the global cwd back at the active project's root. auto-session derives the session name
+      -- from the cwd, so this has to run BEFORE a save (a pre_save hook is too late: the name is fixed by then).
+      _G.Pin_Project_Root = function()
+        local root = _G._project_root
+        if not root or vim.fn.isdirectory(root) ~= 1 then return false end
+        vim.cmd("cd " .. vim.fn.fnameescape(root))
+        return true
+      end
+
+      -- Save the active project's session under its own root, then tear the project down
+      _G.Close_Project = function()
+        pcall(function() require("aerial").close() end)
+        pcall(function() require("nvim-tree.api").tree.close() end)
+        vim.cmd("silent! wall") -- Save all modified buffers first
+        -- Name the session explicitly after the project root so it can't depend on a drifted/stale cwd
+        local root = _G.Pin_Project_Root() and _G._project_root or nil
+        require("auto-session").save_session(root)
+        for _, client in ipairs(vim.lsp.get_clients()) do client:stop() end -- Stop LSP servers on leaving a project (comment out to keep servers running)
+        for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
+            vim.cmd("bdelete! " .. bufnr)
+          end
+        end
+        vim.v.this_session = "" -- Clear session to prevent overwriting on next project
+        _G._project_root = nil
+      end
+
       -- Universal project open helper: cleanly opens project in NvimTree and focuses code window
       _G.Open_Project_Directory = function(dir)
         if not dir or dir == "" then return end
@@ -253,9 +280,17 @@ require("lazy").setup({
         end
         if vim.fn.isdirectory(dir) ~= 1 then return end
 
+        -- Switching away from an open project: save + close it first, so its buffers and session state
+        -- can't leak into the new project's session.
+        if _G._project_root and vim.fs.normalize(dir) ~= _G._project_root then
+          _G.Close_Project()
+        end
+
         vim.v.this_session = ""
-        _G._project_root = dir
         vim.cmd("cd " .. vim.fn.fnameescape(dir))
+        -- Read the root back from the cwd: same canonical form auto-session names sessions from
+        -- (no trailing slash, e.g. fd returns "dir/"), so the name and the saved `cd` always agree.
+        _G._project_root = vim.fn.getcwd(-1, -1)
 
         -- 1. Open and update NvimTree root without focusing it
         local ok, tree_api = pcall(require, "nvim-tree.api")
@@ -591,25 +626,34 @@ require("lazy").setup({
           "AerialClose", 
           function() pcall(vim.cmd, "Trouble close") end,
           clean_unnamed_buffers,
-          -- Reset cwd to the explicitly tracked project root before saving.
-          function()
-            if _G._project_root and vim.fn.isdirectory(_G._project_root) == 1 then
-              vim.cmd("cd " .. vim.fn.fnameescape(_G._project_root))
-            end
-          end,
         },
         pre_restore_cmds = {
           clean_unnamed_buffers,
         },
         post_restore_cmds = {
           clean_unnamed_buffers,
-          -- Open NvimTree rooted at the (now-correct) project cwd
-          function()
-            vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(vim.fn.getcwd()))
+          -- A session's name IS its project directory, so trust that over the `cd` line inside the file
+          -- (older saves could carry another project's cd). Re-pin the root so later saves stay consistent.
+          function(session_name)
+            local root = vim.fs.normalize(session_name or "")
+            if vim.fn.isdirectory(root) ~= 1 then root = vim.fn.getcwd() end
+            vim.cmd("cd " .. vim.fn.fnameescape(root))
+            _G._project_root = vim.fn.getcwd(-1, -1)
+            vim.cmd("NvimTreeOpen " .. vim.fn.fnameescape(_G._project_root))
           end,
           clean_unnamed_buffers,
         },
       })
+
+      -- auto-session names the session from the cwd at the moment it saves (VimLeavePre goes through here).
+      -- Pin the cwd to the active project's root first, so a drifted cwd can't file one project's
+      -- buffers under another project's name.
+      local as = require("auto-session")
+      local auto_save_session = as.auto_save_session
+      as.auto_save_session = function(...)
+        _G.Pin_Project_Root()
+        return auto_save_session(...)
+      end
     end,
   },
 
@@ -1876,6 +1920,7 @@ require("lazy").setup({
   {
     "benlubas/molten-nvim",
     version = "^1.0.0",
+    dependencies = { "3rd/image.nvim" },
     ft = { "python", "ipynb" },
     cmd = { "MoltenInit", "MoltenEvaluateCell", "MoltenReevaluateCell", "MoltenDelete", "MoltenShowOutput" },
     build = ":UpdateRemotePlugins",
@@ -1927,7 +1972,9 @@ require("lazy").setup({
   },
   { "echasnovski/mini.pairs", version = "*", event = "VeryLazy", config = function() require("mini.pairs").setup() end },
   { "folke/which-key.nvim", event = "VeryLazy", config = function() require("which-key").setup({ delay = 500, win = { border = "rounded" } }) end },
-  { "lewis6991/gitsigns.nvim", event = "VeryLazy", config = function() require("gitsigns").setup({ current_line_blame = true, current_line_blame_opts = { delay = 500, virt_text_pos = 'eol' } }) end },
+  { "lewis6991/gitsigns.nvim", event = "VeryLazy", config = function() require("gitsigns").setup({ current_line_blame = false, max_file_length = 20000, current_line_blame_opts = { delay = 500, virt_text_pos = 'eol' } }) end,
+    keys = { { "<leader>gb", "<cmd>Gitsigns toggle_current_line_blame<CR>", desc = "Toggle Line Blame" } },
+  },
   {
     "akinsho/toggleterm.nvim",
     version = "*",
@@ -1947,8 +1994,12 @@ require("lazy").setup({
   -- Inline & Buffer Image Viewer (Kitty Graphics Protocol)
   {
     "3rd/image.nvim",
-    lazy = false,
-    priority = 1000,
+    event = {
+      "BufReadCmd *.png", "BufReadCmd *.jpg", "BufReadCmd *.jpeg", "BufReadCmd *.gif", "BufReadCmd *.webp",
+      "BufReadCmd *.avif", "BufReadCmd *.bmp", "BufReadCmd *.tiff", "BufReadCmd *.ico", "BufReadCmd *.svg",
+      "BufReadPre *.png", "BufReadPre *.jpg", "BufReadPre *.jpeg", "BufReadPre *.gif", "BufReadPre *.webp",
+      "BufReadPre *.avif", "BufReadPre *.bmp", "BufReadPre *.tiff", "BufReadPre *.ico", "BufReadPre *.svg",
+    },
     config = function()
       require("image").setup({
         backend = "kitty",
@@ -1969,11 +2020,7 @@ require("lazy").setup({
           vim.keymap.set("n", "q", "<cmd>bdelete!<CR>", { buffer = args.buf, silent = true, desc = "Close Image" })
           vim.keymap.set("n", "o", function()
             local path = vim.api.nvim_buf_get_name(args.buf)
-            if path ~= "" then
-              if vim.fn.has("mac") == 1 then vim.fn.jobstart({ "open", path }, { detach = true })
-              elseif vim.fn.has("unix") == 1 then vim.fn.jobstart({ "xdg-open", path }, { detach = true })
-              elseif vim.fn.has("win32") == 1 then vim.fn.jobstart({ "cmd", "/c", "start", '""', path }, { detach = true }) end
-            end
+            if path ~= "" then vim.ui.open(path) end
           end, { buffer = args.buf, silent = true, desc = "Open in OS Viewer" })
         end,
       })
@@ -2006,6 +2053,7 @@ require("lazy").setup({
   {
     "sphamba/smear-cursor.nvim",
     event = "VeryLazy",
+    keys = { { "<leader>uc", "<cmd>SmearCursorToggle<CR>", desc = "Toggle Cursor Smear" } },
     opts = {
       cursor_color = "#7aa2f7",
       time_interval = 4, -- ~240 FPS render interval matching 240Hz display
@@ -2135,6 +2183,7 @@ require("lazy").setup({
   {
     "petertriho/nvim-scrollbar",
     event = "VeryLazy",
+    keys = { { "<leader>us", "<cmd>ScrollbarToggle<CR>", desc = "Toggle Scrollbar" } },
     opts = {
       handlers = {
         cursor = true,
@@ -2364,10 +2413,16 @@ vim.lsp.enable("texlab")
 vim.lsp.enable("taplo")
 
 vim.api.nvim_create_autocmd("LspAttach", {
+  group = vim.api.nvim_create_augroup("LspAttachConfig", { clear = true }),
   callback = function(args)
     local client = vim.lsp.get_client_by_id(args.data.client_id)
     if not client then return end
     local bufnr = args.buf
+    -- Stop LSP clients from attaching to large buffers (see BinaryGuard)
+    if vim.b[bufnr].large_file then
+      vim.schedule(function() vim.lsp.buf_detach_client(bufnr, args.data.client_id) end)
+      return
+    end
     local opts = { buffer = bufnr, silent = true }
     
     vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
@@ -2411,6 +2466,18 @@ vim.opt.selectmode = "key,mouse"
 vim.opt.ignorecase = true  
 vim.opt.smartcase = true   
 vim.opt.updatetime = 300   -- Fast CursorHold trigger for diagnostic popups
+vim.opt.undofile = true    -- Persist undo history across sessions
+vim.opt.undolevels = 10000
+vim.opt.scrolloff = 8
+vim.opt.sidescrolloff = 8
+vim.opt.splitright = true
+vim.opt.splitbelow = true
+vim.opt.cursorline = true
+vim.opt.inccommand = "split"
+vim.opt.mouse = "a"
+vim.opt.fillchars:append({ eob = " " })
+vim.opt.list = true
+vim.opt.listchars = { tab = "» ", trail = "·", nbsp = "␣" }
 vim.opt.autoread = true
 vim.opt.sessionoptions = { "buffers", "curdir", "folds", "help", "tabpages", "winsize", "winpos", "terminal" } -- Exclude 'blank' to avoid saving empty/untitled placeholder windows
 
@@ -2450,14 +2517,27 @@ vim.diagnostic.config({
   update_in_insert = false,
 })
 
+vim.api.nvim_create_autocmd("TextYankPost", {
+  group = vim.api.nvim_create_augroup("YankHighlight", { clear = true }),
+  callback = function() vim.hl.on_yank({ timeout = 150 }) end,
+})
+
+-- Shared guard: buffers where idle/focus autocmds (diagnostic float, checktime) should not run
+local ignored_ft = {
+  [""] = true, NvimTree = true, aerial = true, toggleterm = true,
+  trouble = true, alpha = true, lazy = true, mason = true,
+}
+local function is_ignored_buffer()
+  local ft = vim.bo.filetype
+  return vim.bo.buftype ~= "" or ignored_ft[ft] or ft:find("^dap") ~= nil
+end
+
 -- Auto-show floating diagnostic popup ONLY when cursor rests on a line with errors/warnings
 vim.api.nvim_create_autocmd("CursorHold", {
+  group = vim.api.nvim_create_augroup("DiagnosticFloatOnHold", { clear = true }),
   pattern = "*",
   callback = function()
-    local ft = vim.bo.filetype
-    if ft == "" or ft == "NvimTree" or ft == "aerial" or ft == "toggleterm" or ft == "trouble" or ft == "alpha" or ft == "lazy" or ft == "mason" or ft:find("^dap") then
-      return
-    end
+    if is_ignored_buffer() then return end
 
     local lnum = vim.api.nvim_win_get_cursor(0)[1] - 1
     local diagnostics = vim.diagnostic.get(0, { lnum = lnum })
@@ -2503,6 +2583,7 @@ end
 _G.Fix_Sidebar_Widths = fix_sidebar_widths
 
 vim.api.nvim_create_autocmd({ "VimResized" }, {
+  group = vim.api.nvim_create_augroup("SidebarWidths", { clear = true }),
   desc = "Preserve fixed sidebar width ratio for NvimTree and Aerial",
   callback = function()
     vim.schedule(fix_sidebar_widths)
@@ -2626,13 +2707,8 @@ vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold" }, {
   callback = function()
     local mode = vim.api.nvim_get_mode().mode
     if mode == "c" then return end
-    local ft = vim.bo.filetype
-    if ft == "" or ft == "NvimTree" or ft == "aerial" or ft == "toggleterm" or ft == "trouble" or ft == "alpha" or ft == "lazy" or ft == "mason" or ft:find("^dap") then
-      return
-    end
-    local buftype = vim.bo.buftype
-    local bufname = vim.api.nvim_buf_get_name(0)
-    if buftype == "" and bufname ~= "" then
+    if is_ignored_buffer() then return end
+    if vim.api.nvim_buf_get_name(0) ~= "" then
       vim.cmd("checktime")
     end
   end,
@@ -2662,6 +2738,13 @@ local function get_jupytext_cmd(sub_args)
   return cmd
 end
 
+-- Synchronous runner with stdout/stderr kept separate (stderr warnings must not leak into buffer content)
+local function run_sync(cmd, stdin)
+  local ok, res = pcall(function() return vim.system(cmd, { text = true, stdin = stdin }):wait() end)
+  if not ok then return 1, "", tostring(res) end
+  return res.code, res.stdout or "", res.stderr or ""
+end
+
 local function get_nbconvert_cmd(file)
   local local_bin = vim.fn.expand("~/.local/bin/jupyter")
   if vim.fn.executable("jupyter") == 1 then
@@ -2683,10 +2766,10 @@ vim.api.nvim_create_autocmd({ "BufReadCmd" }, {
   callback = function(args)
     local file = args.file
     local cmd = get_jupytext_cmd({ "--to", "py:percent", "--output", "-", file })
-    local out = vim.fn.system(cmd)
-    if vim.v.shell_error ~= 0 or out == "" then
+    local code, out, err = run_sync(cmd)
+    if code ~= 0 or out == "" then
       local fname = vim.fn.fnamemodify(file, ":t")
-      vim.notify("Jupytext failed to convert " .. fname .. ":\n" .. (out ~= "" and out or "Empty output"), vim.log.levels.WARN)
+      vim.notify("Jupytext failed to convert " .. fname .. ":\n" .. (err ~= "" and err or "Empty output"), vim.log.levels.WARN)
 
       vim.schedule(function()
         local nb_cmd_display = 'jupyter nbconvert --to notebook --nbformat 4 --inplace "' .. fname .. '"'
@@ -2701,12 +2784,12 @@ vim.api.nvim_create_autocmd({ "BufReadCmd" }, {
           if idx == 1 then
             local conv_cmd = get_nbconvert_cmd(file)
             vim.notify("Upgrading notebook format for " .. fname .. "...", vim.log.levels.INFO)
-            local conv_out = vim.fn.system(conv_cmd)
-            if vim.v.shell_error == 0 then
+            local conv_code, conv_out, conv_err = run_sync(conv_cmd)
+            if conv_code == 0 then
               vim.notify("Successfully upgraded " .. fname .. " to nbformat 4! Reloading...", vim.log.levels.INFO)
               local retry_cmd = get_jupytext_cmd({ "--to", "py:percent", "--output", "-", file })
-              local retry_out = vim.fn.system(retry_cmd)
-              if vim.v.shell_error == 0 and retry_out ~= "" then
+              local retry_code, retry_out, retry_err = run_sync(retry_cmd)
+              if retry_code == 0 and retry_out ~= "" then
                 local lines = vim.split(retry_out, "\n", { trimempty = false })
                 if vim.api.nvim_buf_is_valid(args.buf) then
                   vim.api.nvim_buf_set_lines(args.buf, 0, -1, false, lines)
@@ -2714,10 +2797,10 @@ vim.api.nvim_create_autocmd({ "BufReadCmd" }, {
                   vim.bo[args.buf].modified = false
                 end
               else
-                vim.notify("Jupytext conversion failed after upgrade: " .. retry_out, vim.log.levels.ERROR)
+                vim.notify("Jupytext conversion failed after upgrade: " .. retry_err, vim.log.levels.ERROR)
               end
             else
-              vim.notify("nbconvert failed:\n" .. conv_out, vim.log.levels.ERROR)
+              vim.notify("nbconvert failed:\n" .. conv_err .. conv_out, vim.log.levels.ERROR)
             end
           else
             vim.notify("Notebook format upgrade cancelled.", vim.log.levels.WARN)
@@ -2757,9 +2840,9 @@ vim.api.nvim_create_autocmd({ "BufWriteCmd" }, {
     local lines = vim.api.nvim_buf_get_lines(args.buf, 0, -1, false)
     local content = table.concat(lines, "\n")
     local cmd = get_jupytext_cmd({ "--from", "py:percent", "--to", "ipynb", "--output", file, "-" })
-    local out = vim.fn.system(cmd, content)
-    if vim.v.shell_error ~= 0 then
-      vim.notify("Jupytext failed to save " .. file .. ": " .. out, vim.log.levels.ERROR)
+    local code, _, err = run_sync(cmd, content)
+    if code ~= 0 then
+      vim.notify("Jupytext failed to save " .. file .. ": " .. err, vim.log.levels.ERROR)
       return
     end
     vim.bo[args.buf].modified = false
@@ -2933,21 +3016,7 @@ end, { noremap = true, silent = true, desc = "Toggle Code Structure Sidebar" })
 -- =========================================================================
 vim.keymap.set('n', '<leader>h', function()
   if vim.bo.filetype == "alpha" then return end
-  pcall(function() require("aerial").close() end)
-  pcall(function() require("nvim-tree.api").tree.close() end)
-  vim.cmd("silent! wall") -- Save all modified buffers first
-  -- Reset cwd to the tracked project root before saving
-  if _G._project_root and vim.fn.isdirectory(_G._project_root) == 1 then
-    vim.cmd("cd " .. vim.fn.fnameescape(_G._project_root))
-  end
-  vim.cmd("AutoSession save") -- Save current session
-  for _, client in ipairs(vim.lsp.get_clients()) do client:stop() end -- Stop LSP servers on return to dashboard (comment out to keep servers running)
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
-      vim.cmd("bdelete! " .. bufnr)
-    end
-  end
-  vim.v.this_session = "" -- Clear session to prevent overwriting on next project
+  _G.Close_Project() -- Save session under the project's own root, then close everything
   vim.cmd("Alpha") -- Open Dashboard
 end, { noremap = true, silent = true, desc = "Save & Return to Dashboard" })
 
@@ -3121,6 +3190,7 @@ end
 
 -- Auto-stop snippet sessions when leaving Insert/Select mode so placeholders never trap the cursor or re-select blocks
 vim.api.nvim_create_autocmd("ModeChanged", {
+  group = vim.api.nvim_create_augroup("SnippetAutoStop", { clear = true }),
   pattern = { "i:n", "s:n", "i:v", "s:v" },
   callback = function()
     if vim.snippet and vim.snippet.active() then
@@ -3268,31 +3338,150 @@ vim.keymap.set('n', '<leader>o', function()
 end, { noremap = true, silent = true, desc = "Open in OS Explorer" })
 
 
--- Auto-open non-image binary files in OS viewer
-vim.api.nvim_create_autocmd("BufReadPre", {
-  pattern = { "*.pdf", "*.mp4", "*.mkv", "*.avi", "*.mp3", "*.zip", "*.tar", "*.gz" },
-  callback = function(args)
-    local path = vim.fn.expand(args.match)
-    if vim.fn.has('mac') == 1 then vim.fn.jobstart({ 'open', path }, { detach = true })
-    elseif vim.fn.has('unix') == 1 then vim.fn.jobstart({ 'xdg-open', path }, { detach = true })
-    elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', path }, { detach = true }) end
+-- Binary file handling: catch known binary extensions AND unknown binaries (NUL-byte sniff)
+local function open_external(path)
+  if vim.fn.has('mac') == 1 then vim.fn.jobstart({ 'open', path }, { detach = true })
+  elseif vim.fn.has('unix') == 1 then vim.fn.jobstart({ 'xdg-open', path }, { detach = true })
+  elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', path }, { detach = true }) end
+end
 
-    vim.schedule(function()
-      if vim.api.nvim_buf_is_valid(args.buf) then
-        vim.api.nvim_buf_delete(args.buf, { force = true })
-      end
-    end)
+-- Binary formats that an OS viewer can meaningfully open
+local external_exts = {
+  "pdf", "mp4", "mkv", "avi", "mov", "webm", "mp3", "flac", "wav",
+  "zip", "tar", "gz", "bz2", "xz", "zst", "7z", "rar", "iso", "whl",
+  "docx", "xlsx", "pptx",
+}
+-- Tabular/data binaries: show a text preview instead (an OS viewer is useless here)
+local data_exts = { "parquet", "feather", "arrow", "orc", "avro", "npy", "npz", "pkl", "pickle", "h5", "hdf5", "sqlite", "db" }
+-- Opaque binaries: nothing sensible to show, just refuse to load them
+local opaque_exts = { "pt", "pth", "onnx", "safetensors", "so", "o", "a", "exe", "dll", "bin", "class", "pyc" }
+
+local function ext_set(list) local s = {} for _, e in ipairs(list) do s[e] = true end return s end
+local ext_external, ext_data, ext_opaque = ext_set(external_exts), ext_set(data_exts), ext_set(opaque_exts)
+
+local function is_binary_content(path)
+  local f = io.open(path, "rb")
+  if not f then return false end
+  local chunk = f:read(8192) or ""
+  f:close()
+  return chunk:find("\0", 1, true) ~= nil
+end
+
+-- Returns preview lines for a data file, or nil if no suitable tool is installed
+local function preview_data_file(path)
+  local ext = path:match("%.([^./]+)$"):lower()
+  local py_by_ext = {
+    parquet = "import pyarrow.parquet as pq,sys; f=pq.ParquetFile(sys.argv[1]); print(f.schema_arrow); print('rows:', f.metadata.num_rows, ' row_groups:', f.num_row_groups); print(); print(f.read_row_group(0).slice(0,100).to_pandas().to_string())",
+    feather = "import pyarrow.feather as ft,sys; t=ft.read_table(sys.argv[1]); print(t.schema); print('rows:', t.num_rows); print(t.slice(0,100).to_pandas().to_string())",
+    npy = "import numpy as np,sys; a=np.load(sys.argv[1], mmap_mode='r'); print(a.dtype, a.shape); print(a[:100])",
+  }
+  local cmd
+  if ext == "parquet" and vim.fn.executable("duckdb") == 1 then
+    local q = ("DESCRIBE SELECT * FROM '%s'; SELECT count(*) AS total_rows FROM '%s'; SELECT * FROM '%s' LIMIT 100;"):format(path, path, path)
+    cmd = { "duckdb", "-c", q }
+  elseif ext == "parquet" and vim.fn.executable("pqrs") == 1 then
+    cmd = { "pqrs", "head", "--records", "100", path }
+  elseif ext == "parquet" and vim.fn.executable("parquet-tools") == 1 then
+    cmd = { "parquet-tools", "show", "--n", "100", path }
+  elseif py_by_ext[ext] and vim.fn.executable("python3") == 1 then
+    cmd = { "python3", "-c", py_by_ext[ext], path }
+  elseif ext == "sqlite" or ext == "db" then
+    if vim.fn.executable("sqlite3") == 1 then cmd = { "sqlite3", path, ".schema" } end
+  end
+  if not cmd then return nil end
+  local out = vim.fn.system(cmd)
+  if vim.v.shell_error ~= 0 or out == "" then return nil end
+  return vim.split(out, "\n", { trimempty = false })
+end
+
+local function show_preview(buf, path, lines)
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].swapfile = false
+    vim.bo[buf].bufhidden = "wipe"
+    vim.api.nvim_buf_set_name(buf, "[preview] " .. vim.fn.fnamemodify(path, ":t"))
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
+    vim.bo[buf].modified = false
+    vim.wo.wrap = false
+  end)
+end
+
+local function reject_binary(buf, path, msg)
+  vim.notify(msg .. ": " .. vim.fn.fnamemodify(path, ":t"), vim.log.levels.WARN)
+  vim.schedule(function()
+    if vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_delete(buf, { force = true }) end
+  end)
+end
+
+local binary_group = vim.api.nvim_create_augroup("BinaryGuard", { clear = true })
+
+-- Known extensions: BufReadCmd replaces the reader, so the file is never loaded into memory
+local function known_binary_reader(args)
+  local path = vim.fn.fnamemodify(args.match, ":p")
+  local ext = (path:match("%.([^./]+)$") or ""):lower()
+  if ext_external[ext] then
+    open_external(path)
+    reject_binary(args.buf, path, "Opened externally")
+  elseif ext_data[ext] then
+    local lines = preview_data_file(path)
+    if lines then show_preview(args.buf, path, lines)
+    else reject_binary(args.buf, path, "Binary data file, no preview tool found (install duckdb or pyarrow)") end
+  else
+    reject_binary(args.buf, path, "Binary file not opened")
+  end
+end
+
+local known_patterns = {}
+for _, list in ipairs({ external_exts, data_exts, opaque_exts }) do
+  for _, e in ipairs(list) do table.insert(known_patterns, "*." .. e) end
+end
+vim.api.nvim_create_autocmd("BufReadCmd", { group = binary_group, pattern = known_patterns, callback = known_binary_reader })
+
+-- Unknown extensions: sniff the first 8 KB for NUL bytes; also apply the big-file guard to text files
+local LARGE_FILE_BYTES = 2 * 1024 * 1024
+vim.api.nvim_create_autocmd("BufReadPre", {
+  group = binary_group,
+  callback = function(args)
+    local path = vim.fn.fnamemodify(args.match, ":p")
+    local stat = vim.uv.fs_stat(path)
+    if not stat or stat.type ~= "file" then return end
+    if is_binary_content(path) then
+      return reject_binary(args.buf, path, "Binary file not opened")
+    end
+    if stat.size > LARGE_FILE_BYTES then
+      vim.b[args.buf].large_file = true
+      vim.opt_local.swapfile = false
+      vim.opt_local.undolevels = -1
+      vim.opt_local.foldmethod = "manual"
+      vim.opt_local.synmaxcol = 200
+      vim.notify(("Large file (%.1f MB): syntax/treesitter/LSP disabled"):format(stat.size / 1048576), vim.log.levels.INFO)
+    end
+  end,
+})
+
+-- Applied after load/filetype detection so it can override plugin defaults
+vim.api.nvim_create_autocmd("FileType", {
+  group = binary_group,
+  callback = function(args)
+    if not vim.b[args.buf].large_file then return end
+    vim.cmd("syntax clear")
+    vim.opt_local.syntax = "off"
+    pcall(vim.treesitter.stop, args.buf)
+    vim.opt_local.wrap = false
+    vim.opt_local.relativenumber = false
   end,
 })
 
 -- Open Git Remote in Browser
 vim.keymap.set('n', '<leader>G', function()
-  local url = vim.fn.system("git config --get remote.origin.url")
-  if vim.v.shell_error ~= 0 or url == "" then return end
-  url = url:gsub("%s+", ""):gsub("^git@([^:]+):", "https://%1/"):gsub("%.git$", "")
-  if vim.fn.has('mac') == 1 then vim.fn.jobstart({ 'open', url }, { detach = true })
-  elseif vim.fn.has('unix') == 1 then vim.fn.jobstart({ 'xdg-open', url }, { detach = true })
-  elseif vim.fn.has('win32') == 1 then vim.fn.jobstart({ 'cmd', '/c', 'start', '""', url }, { detach = true }) end
+  vim.system({ "git", "config", "--get", "remote.origin.url" }, { text = true }, function(res)
+    local url = vim.trim(res.stdout or "")
+    if res.code ~= 0 or url == "" then return end
+    url = url:gsub("^git@([^:]+):", "https://%1/"):gsub("%.git$", "")
+    vim.schedule(function() vim.ui.open(url) end)
+  end)
 end, { noremap = true, silent = true, desc = "Open Git Remote" })
 
 -- Terminal Exit & Splits
